@@ -21,7 +21,21 @@ function apiFixture (overrides = {}) {
     getPools: async () => [{ url: 'stratum+tcp://pool:3333', user: 'worker', password: 'secret', accepted: 10, rejected: 1, status: 'Active' }],
     getErrors: async () => [],
     getMiningTarget: async () => ({ power_target_watts: 3300, power_target_min_watts: 400, power_target_max_watts: 6000, performance_mode: 'MaximumHashrate' }),
-    getSystemInfo: async () => ({ 'system-info': { model: 'R2', cb_sn: 'R2-001', os: { version: '1.8.2' } } }),
+    // Key set observed on R2 firmware, so snapshot tests run against a realistic
+    // payload rather than one trimmed to what the worker happens to publish.
+    getSystemInfo: async () => ({
+      'system-info': {
+        model: 'R2',
+        cb_sn: 'R2-001',
+        os: { version: '1.8.2' },
+        manufacturer: 'Proto',
+        uptime_seconds: 526,
+        mining_driver_sw: { name: 'mining-driver', version: '1.8.2' },
+        board: { revision: 'rev-c' },
+        soc: { model: 'soc-model' },
+        sw_update_status: { status: 'Idle' }
+      }
+    }),
     getCooling: async () => ({ 'cooling-status': { fan_mode: 'Auto', speed_percentage: 55, fans: [{ rpm: 5000 }, { rpm: 5100 }] } }),
     getNetworkInformation: async () => ({ 'network-info': { dhcp: true, ip: '192.0.2.10', netmask: '255.255.255.0', gateway: '192.0.2.1' } }),
     ...overrides
@@ -503,6 +517,24 @@ test('setupPools rejects every malformed entry and appendId before writing', asy
     await t.exception(client.setupPools(pools, appendId), /ERR_(POOL_ENTRY|APPEND_ID)_INVALID/)
   }
   t.is(writes, 0)
+})
+
+test('snapshot publishes no undeclared system-info field', async (t) => {
+  const client = new ProtoRigClient({ id: 'R2-001', api: apiFixture(), cacheMs: 0 })
+  const snap = await client.getSnap()
+  const serialized = JSON.stringify(snap)
+
+  // The worker declares firmware_ver, product_name, model, and serial_number.
+  // Everything else the device volunteers must stay out of the snapshot.
+  for (const undeclared of ['mining_driver_sw', 'board', 'soc', 'sw_update_status', 'manufacturer', 'uptime_seconds']) {
+    t.is(serialized.includes(undeclared), false)
+  }
+  t.is(serialized.includes('rev-c'), false)
+  t.is(serialized.includes('soc-model'), false)
+  t.is(snap.config.firmware_ver, '1.8.2')
+  t.is(snap.config.serial_number, 'R2-001')
+  // The OS clock must not reach uptime_ms even while it is on offer.
+  t.is(snap.stats.uptime_ms, 521000)
 })
 
 test('snapshot uptime accepts only the miner clock', async (t) => {

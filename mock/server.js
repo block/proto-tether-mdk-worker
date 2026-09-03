@@ -58,11 +58,26 @@ function createState (opts = {}) {
       netmask: '255.255.255.0',
       gateway: '192.0.2.1'
     },
+    // Mirrors the key set observed on R2 firmware. Most of these are fields the
+    // worker deliberately does not publish; they are here so the snapshot tests
+    // exercise the projection rather than a conveniently minimal payload.
+    // uptime_seconds tracks slightly ahead of mining.reboot_uptime_s because the
+    // OS boots before the miner process starts.
     system: {
       model: 'R2',
       cb_sn: 'R2-001',
       product_name: 'Proto R2 Rig',
-      os: { version: '1.8.2' }
+      manufacturer: 'Proto',
+      uptime_seconds: 526,
+      os: { version: '1.8.2' },
+      mining_driver_sw: { name: 'mining-driver', version: '1.8.2' },
+      pool_interface_sw: { name: 'pool-interface', version: '1.8.2' },
+      web_server: { name: 'web-server', version: '1.8.2' },
+      web_dashboard: { name: 'web-dashboard', version: '1.8.2' },
+      hashboard_firmware: { version: '1.8.2' },
+      board: { revision: 'rev-c' },
+      soc: { model: 'soc-model' },
+      sw_update_status: { status: 'Idle' }
     }
   }
 }
