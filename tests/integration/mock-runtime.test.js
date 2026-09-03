@@ -47,6 +47,8 @@ test('V2 handlers translate real mock telemetry and normalized snapshot values',
   t.is(snap.stats.uptime_ms, 521000)
   t.is(snap.stats.hashrate_mhs.avg, 95500000)
   t.is(snap.stats.temperature_c.max, 70)
+  t.is(snap.stats.all_pools_shares.stale, 0)
+  t.is(snap.stats.pool_status[0].stale, 0)
   t.is(snap.config.network_config.mode, 'dhcp')
   t.is(snap.config.network_config.ip_address, '192.0.2.10')
   t.is(snap.config.network_config.ip_gw, '192.0.2.1')
@@ -124,7 +126,7 @@ test('delayed and malformed reads return stable errors', async (t) => {
   await t.exception(unavailable.instance.telemetry.get('power')({}), /ERR_HTTP_RESPONSE: 503/)
 })
 
-test('valid JSON malformed telemetry returns stable real-stack validation errors', async (t) => {
+test('valid JSON malformed telemetry and pools return stable real-stack validation errors', async (t) => {
   const scalar = await fixture(t)
   scalar.mock.state.telemetry.miner.power.value = Infinity
   await t.exception(scalar.instance.telemetry.get('power')({}), /ERR_TELEMETRY_RESPONSE_INVALID/)
@@ -132,6 +134,10 @@ test('valid JSON malformed telemetry returns stable real-stack validation errors
   const snapshot = await fixture(t)
   snapshot.mock.state.telemetry.hashboards = {}
   await t.exception(snapshot.instance.telemetry.get('snap')({}), /ERR_TELEMETRY_RESPONSE_INVALID/)
+
+  const pools = await fixture(t)
+  pools.mock.state.pools[0].stale = '2'
+  await t.exception(pools.instance.telemetry.get('snap')({}), /ERR_POOLS_RESPONSE_INVALID/)
 })
 
 test('malformed power bounds fail closed before a real HTTP write', async (t) => {

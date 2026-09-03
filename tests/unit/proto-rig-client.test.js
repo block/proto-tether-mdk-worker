@@ -18,7 +18,7 @@ function apiFixture (overrides = {}) {
         { index: 1, temperature: { inlet: 46, outlet: 70, average: 58 } }
       ]
     }),
-    getPools: async () => [{ url: 'stratum+tcp://pool:3333', user: 'worker', password: 'secret', accepted: 10, rejected: 1, stale: 2, status: 'Active' }],
+    getPools: async () => [{ url: 'stratum+tcp://pool:3333', user: 'worker', password: 'secret', accepted: 10, rejected: 1, status: 'Active' }],
     getErrors: async () => [],
     getMiningTarget: async () => ({ power_target_watts: 3300, power_target_min_watts: 400, power_target_max_watts: 6000, performance_mode: 'MaximumHashrate' }),
     getSystemInfo: async () => ({ 'system-info': { model: 'R2', cb_sn: 'R2-001', os: { version: '1.8.2' } } }),
@@ -115,19 +115,40 @@ test('snapshot rejects malformed nested successful inputs with stable errors', a
   }
 })
 
-test('snapshot uses the common miner shape and omits secrets', async (t) => {
+test('snapshot treats released-optional stale shares as zero and omits secrets', async (t) => {
   const client = new ProtoRigClient({ id: 'R2-001', api: apiFixture(), cacheMs: 0 })
   const snap = await client.getSnap()
   t.is(snap.stats.status, 'mining')
   t.is(snap.stats.hashrate_mhs.avg, 95500000)
   t.is(snap.stats.power_w, 3250)
   t.is(snap.stats.temperature_c.max, 70)
+  t.is(snap.stats.all_pools_shares.stale, 0)
+  t.is(snap.stats.pool_status[0].stale, 0)
   t.is(snap.config.power_mode, 'normal')
   t.is(snap.config.network_config.ip_address, '192.0.2.10')
   t.is(snap.config.model, 'R2')
   t.is(JSON.stringify(snap).includes('password'), false)
   t.is(JSON.stringify(snap).includes('token'), false)
   t.is(JSON.stringify(snap).includes('secret'), false)
+})
+
+test('snapshot rejects malformed or overflowing present stale shares', async (t) => {
+  const pool = { url: 'stratum+tcp://pool:3333', accepted: 10, rejected: 1 }
+  const cases = [
+    [{ ...pool, stale: '2' }],
+    [{ ...pool, stale: -1 }],
+    [{ ...pool, stale: Infinity }],
+    [{ ...pool, stale: Number.MAX_VALUE }, { ...pool, stale: Number.MAX_VALUE }]
+  ]
+
+  for (const pools of cases) {
+    const client = new ProtoRigClient({
+      id: 'R2-001',
+      api: apiFixture({ getPools: async () => pools }),
+      cacheMs: 0
+    })
+    await t.exception(client.getSnap(), /ERR_POOLS_RESPONSE_INVALID/)
+  }
 })
 
 test('mining states and active firmware errors map to MDK status', async (t) => {

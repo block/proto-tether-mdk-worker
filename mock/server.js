@@ -44,7 +44,7 @@ function createState (opts = {}) {
       ]
     },
     pools: [
-      { url: 'stratum+tcp://pool:3333', user: 'worker', password: 'secret', accepted: 10, rejected: 1, stale: 2, status: 'Active' }
+      { url: 'stratum+tcp://pool:3333', user: 'worker', password: 'secret', accepted: 10, rejected: 1, status: 'Active' }
     ],
     errors: [],
     cooling: {
@@ -147,7 +147,6 @@ function route (req, res, state, url, pathname, body) {
       priority: pool.priority,
       accepted: 0,
       rejected: 0,
-      stale: 0,
       status: 'Active'
     }))
     return sendJson(res, 200, { pools: state.pools })
