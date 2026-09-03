@@ -90,7 +90,7 @@
       "ERR_HTTP_CLIENT_REQUIRED": "The API adapter needs an HTTP client.",
       "ERR_API_CLIENT_REQUIRED": "The worker-facing client needs an API adapter.",
       "ERR_CACHE_DURATION_INVALID": "The read cache duration must be a finite number from zero through 5000 milliseconds.",
-      "ERR_REQUEST_TIMEOUT_INVALID": "The request timeout must be a positive finite number of milliseconds.",
+      "ERR_REQUEST_TIMEOUT_INVALID": "The request timeout must be an integer from 1 through 2147483647 milliseconds.",
       "ERR_REQUEST_TIMEOUT": "The firmware request exceeded the configured timeout.",
       "ERR_DEVICE_CONNECTION": "The worker could not connect to the firmware API. A write may have an unknown physical outcome.",
       "ERR_HTTP_RESPONSE": "The firmware returned a non-success HTTP status. A write may have an unknown physical outcome.",

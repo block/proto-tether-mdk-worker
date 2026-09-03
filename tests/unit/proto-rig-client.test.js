@@ -8,14 +8,14 @@ function apiFixture (overrides = {}) {
     getMiningStatus: async () => ({ status: 'Mining', reboot_uptime_s: 521 }),
     getTelemetry: async () => ({
       miner: {
-        hashrate: { value: 95.5 },
-        temperature: { value: 65.5 },
-        power: { value: 3250 },
-        efficiency: { value: 34.03 }
+        hashrate: { value: 95.5, unit: 'TH/s' },
+        temperature: { value: 65.5, unit: '°C' },
+        power: { value: 3250, unit: 'W' },
+        efficiency: { value: 34.03, unit: 'J/TH' }
       },
       hashboards: [
-        { index: 0, temperature: { inlet: 45, outlet: 68, average: 56 } },
-        { index: 1, temperature: { inlet: 46, outlet: 70, average: 58 } }
+        { index: 0, temperature: { unit: '°C', inlet: 45, outlet: 68, average: 56 } },
+        { index: 1, temperature: { unit: '°C', inlet: 46, outlet: 70, average: 58 } }
       ]
     }),
     getPools: async () => [{ url: 'stratum+tcp://pool:3333', user: 'worker', password: 'secret', accepted: 10, rejected: 1, status: 'Active' }],
@@ -59,8 +59,8 @@ test('telemetry methods normalize public API values', async (t) => {
 
 test('scalar getters reject malformed successful values with stable errors', async (t) => {
   const cases = [
-    ['getHashrateAvg', { getTelemetry: async () => ({ miner: { hashrate: { value: '95.5' } } }) }, /ERR_TELEMETRY_RESPONSE_INVALID/],
-    ['getPower', { getTelemetry: async () => ({ miner: { power: { value: Infinity } } }) }, /ERR_TELEMETRY_RESPONSE_INVALID/],
+    ['getHashrateAvg', { getTelemetry: async () => ({ miner: { hashrate: { value: '95.5', unit: 'TH/s' } } }) }, /ERR_TELEMETRY_RESPONSE_INVALID/],
+    ['getPower', { getTelemetry: async () => ({ miner: { power: { value: Infinity, unit: 'W' } } }) }, /ERR_TELEMETRY_RESPONSE_INVALID/],
     ['getTemperature', { getTelemetry: async () => ({ miner: { temperature: null } }) }, /ERR_TELEMETRY_RESPONSE_INVALID/],
     ['getEfficiency', { getTelemetry: async () => ({ miner: {} }) }, /ERR_TELEMETRY_RESPONSE_INVALID/],
     ['getStatus', { getMiningStatus: async () => ({ status: 1 }) }, /ERR_MINING_RESPONSE_INVALID/],
@@ -80,15 +80,36 @@ test('scalar getters reject malformed successful values with stable errors', asy
   }
 })
 
+test('scalar telemetry rejects missing or mismatched released units', async (t) => {
+  const cases = [
+    ['getHashrateAvg', 'hashrate', undefined],
+    ['getHashrateAvg', 'hashrate', 'W'],
+    ['getPower', 'power', 'TH/s'],
+    ['getTemperature', 'temperature', 'J/TH'],
+    ['getEfficiency', 'efficiency', '°C']
+  ]
+
+  for (const [method, metric, unit] of cases) {
+    const client = new ProtoRigClient({
+      id: 'R2-001',
+      cacheMs: 0,
+      api: apiFixture({
+        getTelemetry: async () => ({ miner: { [metric]: { value: 1, unit } } })
+      })
+    })
+    await t.exception(client[method](), /ERR_TELEMETRY_RESPONSE_INVALID/)
+  }
+})
+
 test('snapshot rejects malformed nested successful inputs with stable errors', async (t) => {
   const cases = [
     [{
       getTelemetry: async () => ({
         miner: {
-          hashrate: { value: 95.5 },
-          temperature: { value: 65.5 },
-          power: { value: 3250 },
-          efficiency: { value: 34.03 }
+          hashrate: { value: 95.5, unit: 'TH/s' },
+          temperature: { value: 65.5, unit: '°C' },
+          power: { value: 3250, unit: 'W' },
+          efficiency: { value: 34.03, unit: 'J/TH' }
         },
         hashboards: {}
       })
@@ -96,10 +117,10 @@ test('snapshot rejects malformed nested successful inputs with stable errors', a
     [{
       getTelemetry: async () => ({
         miner: {
-          hashrate: { value: Number.MAX_VALUE },
-          temperature: { value: 65.5 },
-          power: { value: 3250 },
-          efficiency: { value: 34.03 }
+          hashrate: { value: Number.MAX_VALUE, unit: 'TH/s' },
+          temperature: { value: 65.5, unit: '°C' },
+          power: { value: 3250, unit: 'W' },
+          efficiency: { value: 34.03, unit: 'J/TH' }
         },
         hashboards: []
       })
@@ -107,12 +128,12 @@ test('snapshot rejects malformed nested successful inputs with stable errors', a
     [{
       getTelemetry: async () => ({
         miner: {
-          hashrate: { value: 95.5 },
-          temperature: { value: 65.5 },
-          power: { value: 3250 },
-          efficiency: { value: 34.03 }
+          hashrate: { value: 95.5, unit: 'TH/s' },
+          temperature: { value: 65.5, unit: '°C' },
+          power: { value: 3250, unit: 'W' },
+          efficiency: { value: 34.03, unit: 'J/TH' }
         },
-        hashboards: [{ index: 0, temperature: { inlet: 45, outlet: Infinity, average: 56 } }]
+        hashboards: [{ index: 0, temperature: { unit: '°C', inlet: 45, outlet: Infinity, average: 56 } }]
       })
     }, /ERR_TELEMETRY_RESPONSE_INVALID/],
     [{ getPools: async () => [null] }, /ERR_POOLS_RESPONSE_INVALID/],
@@ -193,7 +214,7 @@ test('concurrent telemetry reads share one in-flight request', async (t) => {
     getTelemetry: async () => {
       calls++
       await pending
-      return { miner: { hashrate: { value: 95.5 }, power: { value: 3250 } } }
+      return { miner: { hashrate: { value: 95.5, unit: 'TH/s' }, power: { value: 3250, unit: 'W' } } }
     }
   })
   const client = new ProtoRigClient({ id: 'R2-001', api, cacheMs: 100 })
@@ -210,7 +231,7 @@ test('rejected reads are evicted so later reads can retry', async (t) => {
     getTelemetry: async () => {
       calls++
       if (calls === 1) throw new Error('telemetry down')
-      return { miner: { power: { value: 3100 } } }
+      return { miner: { power: { value: 3100, unit: 'W' } } }
     }
   })
   const client = new ProtoRigClient({ id: 'R2-001', api, cacheMs: 1000 })
@@ -232,12 +253,12 @@ test('read caches are instance-local', async (t) => {
   let secondCalls = 0
   const first = new ProtoRigClient({
     id: 'R2-001',
-    api: apiFixture({ getTelemetry: async () => { firstCalls++; return { miner: { power: { value: 3000 } } } } }),
+    api: apiFixture({ getTelemetry: async () => { firstCalls++; return { miner: { power: { value: 3000, unit: 'W' } } } } }),
     cacheMs: 1000
   })
   const second = new ProtoRigClient({
     id: 'R2-002',
-    api: apiFixture({ getTelemetry: async () => { secondCalls++; return { miner: { power: { value: 4000 } } } } }),
+    api: apiFixture({ getTelemetry: async () => { secondCalls++; return { miner: { power: { value: 4000, unit: 'W' } } } } }),
     cacheMs: 1000
   })
   t.is(await first.getPower(), 3000)
@@ -342,7 +363,7 @@ test('reads after rejected writes bypass stale command-affected cache entries', 
     api: apiFixture({
       getTelemetry: async () => {
         rebootReads++
-        return { miner: { power: { value: rebootPower } } }
+        return { miner: { power: { value: rebootPower, unit: 'W' } } }
       },
       reboot: async () => {
         rebootPower = 3100
@@ -568,16 +589,42 @@ test('snapshot rejects malformed hashboard indexes', async (t) => {
       api: apiFixture({
         getTelemetry: async () => ({
           miner: {
-            hashrate: { value: 95.5 },
-            temperature: { value: 65.5 },
-            power: { value: 3250 },
-            efficiency: { value: 34.03 }
+            hashrate: { value: 95.5, unit: 'TH/s' },
+            temperature: { value: 65.5, unit: '°C' },
+            power: { value: 3250, unit: 'W' },
+            efficiency: { value: 34.03, unit: 'J/TH' }
           },
-          hashboards: [{ index, temperature: { inlet: 45, outlet: 68, average: 56 } }]
+          hashboards: [{ index, temperature: { unit: '°C', inlet: 45, outlet: 68, average: 56 } }]
         })
       })
     })
     await t.exception(client.getSnap(), /ERR_TELEMETRY_RESPONSE_INVALID/)
+  }
+})
+
+test('snapshot rejects mismatched hashboard temperature units', async (t) => {
+  const telemetry = await apiFixture().getTelemetry()
+  telemetry.hashboards[0].temperature.unit = 'W'
+  const client = new ProtoRigClient({
+    id: 'R2-001',
+    cacheMs: 0,
+    api: apiFixture({ getTelemetry: async () => telemetry })
+  })
+  await t.exception(client.getSnap(), /ERR_TELEMETRY_RESPONSE_INVALID/)
+})
+
+test('snapshot rejects cooling values outside the released schema', async (t) => {
+  for (const coolingStatus of [
+    { fan_mode: 'Turbo', speed_percentage: 55, fans: [] },
+    { fan_mode: 'Auto', speed_percentage: 50.5, fans: [] },
+    { fan_mode: 'Manual', speed_percentage: 101, fans: [] }
+  ]) {
+    const client = new ProtoRigClient({
+      id: 'R2-001',
+      cacheMs: 0,
+      api: apiFixture({ getCooling: async () => ({ 'cooling-status': coolingStatus }) })
+    })
+    await t.exception(client.getSnap(), /ERR_COOLING_RESPONSE_INVALID/)
   }
 })
 
@@ -608,7 +655,7 @@ test('snapshot omits free-form firmware error strings', async (t) => {
       getErrors: async () => [{
         error_code: 'token-secret',
         message: 'password-secret',
-        source: 'fan',
+        source: 'psu',
         slot: 3,
         timestamp: 1764160757
       }]
@@ -617,7 +664,7 @@ test('snapshot omits free-form firmware error strings', async (t) => {
   const snap = await client.getSnap()
   t.alike(snap.stats.errors, [{
     name: 'firmware_error',
-    source: 'fan',
+    source: 'psu',
     slot: 3,
     timestamp: 1764160757
   }])

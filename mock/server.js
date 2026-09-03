@@ -33,14 +33,14 @@ function createState (opts = {}) {
     },
     telemetry: {
       miner: {
-        hashrate: { value: 95.5 },
-        temperature: { value: 65.5 },
-        power: { value: 3250 },
-        efficiency: { value: 34.03 }
+        hashrate: { value: 95.5, unit: 'TH/s' },
+        temperature: { value: 65.5, unit: '°C' },
+        power: { value: 3250, unit: 'W' },
+        efficiency: { value: 34.03, unit: 'J/TH' }
       },
       hashboards: [
-        { index: 0, temperature: { inlet: 45, outlet: 68, average: 56 } },
-        { index: 1, temperature: { inlet: 46, outlet: 70, average: 58 } }
+        { index: 0, temperature: { unit: '°C', inlet: 45, outlet: 68, average: 56 } },
+        { index: 1, temperature: { unit: '°C', inlet: 46, outlet: 70, average: 58 } }
       ]
     },
     pools: [

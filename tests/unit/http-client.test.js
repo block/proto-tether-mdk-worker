@@ -17,6 +17,8 @@ test('constructor validates and applies public API defaults', (t) => {
   })
   t.is(client.baseUrl, 'http://192.0.2.10:80/api/v1')
   t.exception(() => new ProtoHttpClient({ address: '192.0.2.10', password: 'secret', protocol: 'file' }), /ERR_PROTOCOL_UNSUPPORTED/)
+  t.exception(() => new ProtoHttpClient({ address: '192.0.2.10', password: 'secret', protocol: '' }), /ERR_PROTOCOL_UNSUPPORTED/)
+  t.exception(() => new ProtoHttpClient({ address: '192.0.2.10', password: 'secret', protocol: null }), /ERR_PROTOCOL_UNSUPPORTED/)
   t.exception(() => new ProtoHttpClient({ password: 'secret' }), /ERR_DEVICE_ADDRESS_REQUIRED/)
   t.exception(() => new ProtoHttpClient({ address: '192.0.2.10' }), /ERR_DEVICE_CREDENTIALS_REQUIRED/)
   t.exception(() => new ProtoHttpClient({ address: '192.0.2.10', password: 'secret', timeout: -1 }), /ERR_REQUEST_TIMEOUT_INVALID/)
