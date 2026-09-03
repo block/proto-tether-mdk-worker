@@ -62,6 +62,61 @@ jobs:
           MDK_WORKER_BASE: ../mdk/backend/core/mdk-worker
         run: node ../mdk/packages/mdk-skill/src/skills/mdk-worker-plugin/scripts/worker-smoke.mjs .
 
-      - name: Reject private package registries
+      - name: Reject non-public package registries
         working-directory: proto-tether-mdk-worker
-        run: if grep -Ei 'global\.block-artifacts|artifactory|square-npm' package-lock.json; then exit 1; fi
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs')
+
+          const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'))
+          const entries = []
+
+          for (const [name, meta] of Object.entries(lock.packages || {})) {
+            entries.push(['packages', name, meta])
+          }
+
+          for (const [name, meta] of Object.entries(lock.dependencies || {})) {
+            entries.push(['dependencies', name, meta])
+          }
+
+          let checked = 0
+          let local = 0
+
+          for (const [section, name, meta] of entries) {
+            if (!meta || typeof meta !== 'object') {
+              console.error(`package-lock integrity check failed: invalid ${section} entry ${JSON.stringify(name)}`)
+              process.exit(1)
+            }
+
+            if (section === 'packages' && name === '') {
+              if (meta.resolved != null) {
+                console.error('package-lock integrity check failed: root package unexpectedly has a resolved source URL')
+                process.exit(1)
+              }
+              local += 1
+              continue
+            }
+
+            if (typeof meta.resolved !== 'string' || meta.resolved.length === 0) {
+              console.error(`package-lock integrity check failed: ${section}:${name} is missing a resolved source URL`)
+              process.exit(1)
+            }
+
+            checked += 1
+
+            let url
+            try {
+              url = new URL(meta.resolved)
+            } catch {
+              console.error(`package-lock integrity check failed: ${section}:${name} has a malformed resolved source URL`)
+              process.exit(1)
+            }
+
+            if (url.protocol !== 'https:' || url.hostname !== 'registry.npmjs.org') {
+              console.error(`package-lock integrity check failed: ${section}:${name} resolved to non-public host ${url.hostname || '(empty)'}`)
+              process.exit(1)
+            }
+          }
+
+          console.log(`package-lock integrity check passed: ${checked} resolved entries allowlisted; ${local} local root entry`)
+          NODE
