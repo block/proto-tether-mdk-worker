@@ -11,11 +11,13 @@ Device options:
 | `address` | Yes | Non-empty host-only string for the Proto Rig public API v1 endpoint. Userinfo, ports, paths, queries, and fragments are rejected; configure the port separately. |
 | `port` | No | HTTP port. Defaults to `80`. |
 | `protocol` | No | `http` or `https`. Defaults to `http` to match the public API, which means credentials and tokens travel in cleartext. `https` requires a rig with a verifiable certificate or a custom `fetchImpl`; see [Transport security](README.md#transport-security). |
-| `timeout` | No | Request timeout in milliseconds. Defaults to `10000`. |
-| `password` | Conditional | Device password. Use secret management. Required when `accessToken` is absent. |
-| `accessToken` | Conditional | Existing bearer access token. Use secret management. Required when `password` is absent. |
-| `refreshToken` | No | Existing refresh token. Use secret management. |
+| `timeout` | No | Request timeout in whole milliseconds from `1` through `2147483647`. Defaults to `10000`. |
+| `password` | Conditional | Device password. Use secret management. Required when `accessToken` is absent. Supports initial login and renewal after a rejected access token. |
+| `accessToken` | Conditional | Existing bearer access token. Use secret management. Required when `password` is absent. Without a password or refresh token, an explicit `401` ends authentication. |
+| `refreshToken` | No | Existing refresh token used for renewal. Use secret management. It does not authenticate by itself; configure `password` or `accessToken` as well. |
 | `cacheMs` | No | Finite read cache window from `0` through the conservative public maximum `5000` milliseconds. Defaults to `100`. |
+
+Supported credential combinations are password-only, access-token-only, access token with a refresh token, access token with a password fallback, or password with a refresh token. Refresh-token-only configuration is rejected at startup.
 
 Never commit credentials, tokens, or pool passwords. Do not place them in examples, fixtures, or checked-in configuration.
 
@@ -57,7 +59,7 @@ Commands call public API v1 write endpoints. They return serializable MDK comman
 | --- | --- | --- |
 | `reboot` | none | Restarts the R2 Rig controller. Do not call more than once per 5 minutes. |
 | `setPowerMode` | `mode`: `normal` or `sleep` | Starts mining for `normal` or stops mining for `sleep`. |
-| `setPowerTarget` | `watts`: number | Rounds to the exact transmitted integer, then checks finite positive safe-integer device bounds before writing. Missing, malformed, unsafe, or inverted bounds fail closed. |
+| `setPowerTarget` | `watts`: number from `1` through `12000` | The published R2 contract rejects values above its model-wide ceiling. The handler rounds to the exact transmitted integer, then checks finite positive safe-integer device bounds before writing. Missing, malformed, unsafe, or inverted bounds fail closed. |
 | `setLED` | `enabled`: boolean | Turns the control-board locate LED on or off for physical identification. |
 | `setupPools` | `pools`: one to three entries, `appendId`: optional boolean | Replaces configured mining pools. The worker appends `deviceId` to each worker name unless `appendId` is `false`. |
 
@@ -76,7 +78,7 @@ Preserve the previous pool configuration before changing mining destinations. Ve
 
 ## Failure semantics
 
-The HTTP client authenticates with the password, access token, or refresh token from runtime configuration. Any authenticated request, including a write, may replay once only after an explicit HTTP 401 and successful token renewal. This is the sole retry path.
+The HTTP client authenticates initially with a configured access token or by logging in with the device password. A refresh token is renewal material, not a standalone initial credential. Any authenticated request, including a write, may replay once only after an explicit HTTP 401 and successful token renewal. This is the sole retry path.
 
 The worker does not retry non-401 HTTP responses, connection errors, request timeouts, malformed JSON, malformed successful responses, or any other ambiguous outcome. A timeout or disconnect during a write has an unknown physical outcome and must not trigger an automatic retry. Read current device state before sending another write.
 

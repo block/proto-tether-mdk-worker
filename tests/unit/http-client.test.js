@@ -20,6 +20,7 @@ test('constructor validates and applies public API defaults', (t) => {
   t.exception(() => new ProtoHttpClient({ password: 'secret' }), /ERR_DEVICE_ADDRESS_REQUIRED/)
   t.exception(() => new ProtoHttpClient({ address: '192.0.2.10' }), /ERR_DEVICE_CREDENTIALS_REQUIRED/)
   t.exception(() => new ProtoHttpClient({ address: '192.0.2.10', password: 'secret', timeout: -1 }), /ERR_REQUEST_TIMEOUT_INVALID/)
+  t.exception(() => new ProtoHttpClient({ address: '192.0.2.10', password: 'secret', timeout: 0.5 }), /ERR_REQUEST_TIMEOUT_INVALID/)
   t.exception(() => new ProtoHttpClient({ address: '192.0.2.10', password: 'secret', timeout: 2147483648 }), /ERR_REQUEST_TIMEOUT_INVALID/)
   t.exception(() => new ProtoHttpClient({ address: '192.0.2.10', password: 'secret', port: 0 }), /ERR_DEVICE_PORT_INVALID/)
 })
@@ -236,7 +237,7 @@ test('body read failures use stable redacted errors', async (t) => {
     fetchImpl: async () => ({
       status: 200,
       ok: true,
-      text: async () => { throw new Error('stream failed with token-secret upstream detail') }
+      text: async () => { throw new Error('ERR_STREAM token-secret upstream detail') }
     })
   })
   let bodyError

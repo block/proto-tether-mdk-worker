@@ -45,7 +45,7 @@
         "constraints": "Use a value within the device-reported minimum and maximum bounds. Verify cooling before increasing power. Do not retry after an unknown network outcome.",
         "handler": "src/commands/set-power-target.js",
         "params": [
-          { "name": "watts", "type": "number", "required": true, "min": 1 }
+          { "name": "watts", "type": "number", "required": true, "min": 1, "max": 12000 }
         ]
       },
       {
@@ -60,7 +60,7 @@
       {
         "name": "setupPools",
         "description": "Replaces the configured mining pools with one to three entries.",
-        "constraints": "Preserve the previous configuration before changing mining destinations. Do not retry after an unknown network outcome.",
+        "constraints": "The pools parameter must be an array containing one to three entries. Preserve the previous configuration before changing mining destinations. Do not retry after an unknown network outcome.",
         "handler": "src/commands/setup-pools.js",
         "params": [
           { "name": "pools", "type": "object", "required": true },

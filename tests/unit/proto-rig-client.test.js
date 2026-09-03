@@ -600,20 +600,44 @@ test('snapshot publishes only declared fan fields', async (t) => {
   t.is(JSON.stringify(snap).includes('FAN-SECRET'), false)
 })
 
-test('snapshot bounds device authored error messages', async (t) => {
+test('snapshot omits free-form firmware error strings', async (t) => {
   const client = new ProtoRigClient({
     id: 'R2-001',
     cacheMs: 0,
     api: apiFixture({
-      getErrors: async () => [
-        { error_code: 'FanSlow', message: 'x'.repeat(5000) },
-        { error_code: 'Overheat', message: { nested: 'object' } }
-      ]
+      getErrors: async () => [{
+        error_code: 'token-secret',
+        message: 'password-secret',
+        source: 'fan',
+        slot: 3,
+        timestamp: 1764160757
+      }]
     })
   })
   const snap = await client.getSnap()
-  t.is(snap.stats.errors[0].message.length, 259)
-  t.is(snap.stats.errors[1].message, undefined)
+  t.alike(snap.stats.errors, [{
+    name: 'firmware_error',
+    source: 'fan',
+    slot: 3,
+    timestamp: 1764160757
+  }])
+  t.is(JSON.stringify(snap).includes('token-secret'), false)
+  t.is(JSON.stringify(snap).includes('password-secret'), false)
+})
+
+test('snapshot rejects firmware error metadata outside the released schema', async (t) => {
+  for (const error of [
+    { source: 'token-secret' },
+    { source: 'fan', slot: '3' },
+    { source: 'rig', timestamp: Infinity }
+  ]) {
+    const client = new ProtoRigClient({
+      id: 'R2-001',
+      cacheMs: 0,
+      api: apiFixture({ getErrors: async () => [error] })
+    })
+    await t.exception(client.getSnap(), /ERR_ERRORS_RESPONSE_INVALID/)
+  }
 })
 
 test('snapshot refuses externally configured pool URL userinfo without exposing it', async (t) => {
