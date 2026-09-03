@@ -1,0 +1,67 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - mdk-ref: 633ee07905a6af1d9e0c44b770df09eb0ac432b4
+            compatibility: minimum
+          - mdk-ref: main
+            compatibility: upstream
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out Worker
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: proto-tether-mdk-worker
+
+      - name: Check out MDK
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: tetherto/mdk
+          ref: ${{ matrix.mdk-ref }}
+          path: mdk
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: proto-tether-mdk-worker/package-lock.json
+
+      - name: Install MDK core dependencies
+        working-directory: mdk/backend/core
+        run: ./install-packages.sh
+
+      - name: Install Worker dependencies
+        working-directory: proto-tether-mdk-worker
+        run: npm ci --registry=https://registry.npmjs.org
+
+      - name: Run Worker tests
+        working-directory: proto-tether-mdk-worker
+        env:
+          MDK_REPO: ../mdk
+        run: npm test
+
+      - name: Run canonical Worker smoke test
+        working-directory: proto-tether-mdk-worker
+        env:
+          MDK_WORKER_BASE: ../mdk/backend/core/mdk-worker
+        run: node ../mdk/packages/mdk-skill/src/skills/mdk-worker-plugin/scripts/worker-smoke.mjs .
+
+      - name: Reject private package registries
+        working-directory: proto-tether-mdk-worker
+        run: if grep -Ei 'global\.block-artifacts|artifactory|square-npm' package-lock.json; then exit 1; fi
