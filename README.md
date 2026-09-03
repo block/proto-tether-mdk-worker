@@ -117,6 +117,14 @@ Any authenticated request, including a write, may replay once only after an expl
 
 Do not store credentials or pool passwords in source control. Load them from secret management at runtime.
 
+### Transport security
+
+`protocol` defaults to `http`, so the device password and the JWTs derived from it cross the network in cleartext. Anyone who can observe the path between the host and the rig can read them. Treat the management network as the trust boundary and keep rigs off shared or routed segments.
+
+Most Proto rigs also serve the API over HTTPS, but they commonly present self-signed or otherwise unverifiable certificates. This worker calls `globalThis.fetch`, which verifies certificates by default, so setting `protocol: 'https'` against such a rig fails the TLS handshake and surfaces as `ERR_DEVICE_CONNECTION`. There is no CA or certificate-verification option yet; reaching those rigs today means supplying your own `fetchImpl` carrying an explicit TLS policy.
+
+Note that unverified TLS buys encryption without authentication. It stops passive interception but not an active machine-in-the-middle on the same LAN, so it is not a substitute for network isolation.
+
 ## License
 
 This project is licensed under the Apache License, Version 2.0. See `LICENSE` and `NOTICE`.

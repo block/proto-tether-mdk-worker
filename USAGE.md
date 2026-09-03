@@ -10,7 +10,7 @@ Device options:
 | --- | --- | --- |
 | `address` | Yes | Non-empty host-only string for the Proto Rig public API v1 endpoint. Userinfo, ports, paths, queries, and fragments are rejected; configure the port separately. |
 | `port` | No | HTTP port. Defaults to `80`. |
-| `protocol` | No | `http` or `https`. Defaults to `http`. |
+| `protocol` | No | `http` or `https`. Defaults to `http` to match the public API, which means credentials and tokens travel in cleartext. `https` requires a rig with a verifiable certificate or a custom `fetchImpl`; see [Transport security](README.md#transport-security). |
 | `timeout` | No | Request timeout in milliseconds. Defaults to `10000`. |
 | `password` | Conditional | Device password. Use secret management. Required when `accessToken` is absent. |
 | `accessToken` | Conditional | Existing bearer access token. Use secret management. Required when `password` is absent. |

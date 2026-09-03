@@ -505,6 +505,29 @@ test('setupPools rejects every malformed entry and appendId before writing', asy
   t.is(writes, 0)
 })
 
+test('snapshot uptime accepts only the miner clock', async (t) => {
+  // system-info.uptime_seconds is a different clock. It must not stand in for a
+  // missing reboot_uptime_s, and getSnap must fail exactly where getUptime does.
+  const api = apiFixture({
+    getMiningStatus: async () => ({ status: 'Mining' }),
+    getSystemInfo: async () => ({
+      'system-info': { model: 'R2', cb_sn: 'R2-001', uptime_seconds: 99999, os: { version: '1.8.2' } }
+    })
+  })
+  const client = new ProtoRigClient({ id: 'R2-001', api, cacheMs: 0 })
+  await t.exception(client.getSnap(), /ERR_MINING_RESPONSE_INVALID/)
+  await t.exception(client.getUptime(), /ERR_MINING_RESPONSE_INVALID/)
+})
+
+test('snapshot reports no hashrate window it cannot measure', async (t) => {
+  const client = new ProtoRigClient({ id: 'R2-001', api: apiFixture(), cacheMs: 0 })
+  const snap = await client.getSnap()
+  t.alike(snap.stats.hashrate_mhs, { avg: 95500000 })
+  for (const window of ['t_5s', 't_5m', 't_30m']) {
+    t.is(snap.stats.hashrate_mhs[window], undefined)
+  }
+})
+
 test('snapshot rejects malformed hashboard indexes', async (t) => {
   for (const index of [undefined, -1, 1.5, '0', null]) {
     const client = new ProtoRigClient({

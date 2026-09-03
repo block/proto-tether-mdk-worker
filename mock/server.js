@@ -62,7 +62,6 @@ function createState (opts = {}) {
       model: 'R2',
       cb_sn: 'R2-001',
       product_name: 'Proto R2 Rig',
-      uptime_seconds: 521,
       os: { version: '1.8.2' }
     }
   }
