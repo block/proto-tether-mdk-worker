@@ -1,0 +1,106 @@
+{
+  "metadata": {
+    "provider": "proto",
+    "deviceFamily": "miner",
+    "brand": "Proto",
+    "modelsSupported": ["R2"],
+    "overview": "Controls Proto R2 Rig bitcoin miners over the public firmware MDK HTTP API v1 with JWT bearer authentication. Operations affect physical hardware—prioritize thermal and power safety."
+  },
+  "capabilities": {
+    "telemetry": [
+      { "name": "hashrate_avg", "unit": "TH/s", "type": "number", "handler": "src/telemetry/hashrate-avg.js", "description": "Average miner hashrate reported by the current telemetry endpoint." },
+      { "name": "power", "unit": "W", "type": "number", "handler": "src/telemetry/power.js", "description": "Current miner power consumption." },
+      { "name": "temperature", "unit": "C", "type": "number", "handler": "src/telemetry/temperature.js", "description": "Current aggregate miner temperature." },
+      { "name": "efficiency", "unit": "W/TH", "type": "number", "handler": "src/telemetry/efficiency.js", "description": "Current miner energy efficiency. Firmware reports the equivalent J/TH value." },
+      { "name": "status", "unit": "", "type": "string", "handler": "src/telemetry/status.js", "description": "Mining state normalized to Tether MDK status values." },
+      { "name": "uptime", "unit": "ms", "type": "number", "handler": "src/telemetry/uptime.js", "description": "Elapsed time since system reboot in milliseconds." },
+      { "name": "accepted_shares", "unit": "", "type": "number", "handler": "src/telemetry/accepted-shares.js", "description": "Total accepted shares across configured pools." },
+      { "name": "rejected_shares", "unit": "", "type": "number", "handler": "src/telemetry/rejected-shares.js", "description": "Total rejected shares across configured pools." },
+      { "name": "power_mode", "unit": "", "type": "string", "handler": "src/telemetry/power-mode.js", "description": "Current Tether MDK power mode: normal while operating and sleep while stopped or curtailed." },
+      { "name": "power_target", "unit": "W", "type": "number", "handler": "src/telemetry/power-target.js", "description": "Configured mining power target in watts." },
+      { "name": "fan_speed", "unit": "RPM", "type": "number", "handler": "src/telemetry/fan-speed.js", "description": "Average speed of all cooling fans." },
+      { "name": "snap", "unit": "", "type": "object", "handler": "src/telemetry/snap.js", "description": "Structured miner statistics and non-secret configuration metadata." }
+    ],
+    "commands": [
+      {
+        "name": "reboot",
+        "description": "Restarts the R2 Rig controller.",
+        "constraints": "Do not call more than once per 5 minutes. Do not retry after an unknown network outcome.",
+        "handler": "src/commands/reboot.js",
+        "params": []
+      },
+      {
+        "name": "setPowerMode",
+        "description": "Starts or stops mining.",
+        "constraints": "Use normal to start mining or sleep to stop mining. Do not retry after an unknown network outcome.",
+        "handler": "src/commands/set-power-mode.js",
+        "params": [
+          { "name": "mode", "type": "string", "required": true, "enum": ["normal", "sleep"] }
+        ]
+      },
+      {
+        "name": "setPowerTarget",
+        "description": "Sets the R2 Rig mining power target in watts.",
+        "constraints": "Use a value within the device-reported minimum and maximum bounds. Verify cooling before increasing power. Do not retry after an unknown network outcome.",
+        "handler": "src/commands/set-power-target.js",
+        "params": [
+          { "name": "watts", "type": "number", "required": true, "min": 1 }
+        ]
+      },
+      {
+        "name": "setLED",
+        "description": "Turns the control-board locate LED on or off.",
+        "constraints": "Use only for physical identification. Do not retry after an unknown network outcome.",
+        "handler": "src/commands/set-led.js",
+        "params": [
+          { "name": "enabled", "type": "boolean", "required": true }
+        ]
+      },
+      {
+        "name": "setupPools",
+        "description": "Replaces the configured mining pools with one to three entries.",
+        "constraints": "Preserve the previous configuration before changing mining destinations. Do not retry after an unknown network outcome.",
+        "handler": "src/commands/setup-pools.js",
+        "params": [
+          { "name": "pools", "type": "object", "required": true },
+          { "name": "appendId", "type": "boolean" }
+        ]
+      }
+    ],
+    "config": { "schema": "proto_rig_config_v1" },
+    "health": {
+      "supportedStates": ["OK", "DEGRADED", "OFFLINE"],
+      "alerts": ["alert.overheat", "alert.hashboard_error", "alert.fan_failure", "alert.psu_failure", "alert.pool_dead"],
+      "troubleshooting": [
+        "If temperature is excessive, verify fan operation and ambient temperature before increasing the power target.",
+        "If status is error, inspect the firmware error source and slot before rebooting.",
+        "If status is offline, verify the address, password, HTTP port, and API reachability."
+      ]
+    },
+    "errors": {
+      "ERR_DEVICE_ID_REQUIRED": "The Tether MDK device ID is missing.",
+      "ERR_DEVICE_ADDRESS_REQUIRED": "The device address is missing.",
+      "ERR_DEVICE_CREDENTIALS_REQUIRED": "The device password or access token is missing.",
+      "ERR_DEVICE_PORT_INVALID": "The device port must be an integer from 1 through 65535.",
+      "ERR_PROTOCOL_UNSUPPORTED": "The configured protocol must be HTTP or HTTPS.",
+      "ERR_FETCH_REQUIRED": "No HTTP fetch implementation is available.",
+      "ERR_HTTP_CLIENT_REQUIRED": "The API adapter needs an HTTP client.",
+      "ERR_API_CLIENT_REQUIRED": "The worker-facing client needs an API adapter.",
+      "ERR_REQUEST_TIMEOUT_INVALID": "The request timeout must be a positive finite number of milliseconds.",
+      "ERR_REQUEST_TIMEOUT": "The firmware request exceeded the configured timeout.",
+      "ERR_DEVICE_CONNECTION": "The worker could not connect to the firmware API. A write may have an unknown physical outcome.",
+      "ERR_HTTP_RESPONSE": "The firmware returned a non-success HTTP status. A write may have an unknown physical outcome.",
+      "ERR_RESPONSE_INVALID_JSON": "The firmware returned malformed JSON. A write may have an unknown physical outcome.",
+      "ERR_AUTHENTICATION_FAILED": "The firmware rejected authentication.",
+      "ERR_AUTHENTICATION_RESPONSE_INVALID": "The authentication response did not contain an access token.",
+      "ERR_ERRORS_RESPONSE_INVALID": "The firmware errors response was not an array.",
+      "ERR_POOLS_RESPONSE_INVALID": "The firmware pools response did not contain a pools array.",
+      "ERR_POWER_TARGET_INVALID": "The power target must be a positive finite number.",
+      "ERR_POWER_TARGET_OUT_OF_RANGE": "The power target is outside the bounds reported by the device.",
+      "ERR_SET_POWER_MODE_INVALID": "The power mode must be normal or sleep.",
+      "ERR_SET_LED_ENABLED_INVALID": "The LED value must be boolean.",
+      "ERR_POOLS_INVALID": "Pool configuration must contain one to three entries.",
+      "ERR_POOL_ENTRY_INVALID": "Each pool needs a URL and worker name."
+    }
+  }
+}
