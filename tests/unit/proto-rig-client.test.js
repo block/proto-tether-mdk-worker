@@ -254,6 +254,36 @@ test('setPowerTarget normalizes the exact transmitted integer before checking bo
   t.alike(writes, [400])
 })
 
+test('setPowerTarget rejects unusable requests before reading device bounds', async (t) => {
+  for (const watts of [NaN, Infinity, -Infinity, -100, 0, 0.4, '2800', null, undefined]) {
+    let writes = 0
+    let bounds = 0
+    const api = apiFixture({
+      getMiningTarget: async () => {
+        bounds++
+        return { power_target_watts: 3300, power_target_min_watts: 400, power_target_max_watts: 6000 }
+      },
+      setPowerTarget: async () => { writes++ }
+    })
+    const client = new ProtoRigClient({ id: 'R2-001', api, cacheMs: 0 })
+    await t.exception(client.setPowerTarget(watts), /ERR_POWER_TARGET_INVALID/)
+    t.is(writes, 0)
+    t.is(bounds, 0)
+  }
+})
+
+test('device write responses cannot shadow the worker success flag', async (t) => {
+  const api = apiFixture({
+    reboot: async () => ({ success: false, rebooting: true }),
+    setLED: async () => ({ success: 'no' }),
+    startMining: async () => ({ success: null })
+  })
+  const client = new ProtoRigClient({ id: 'R2-001', api })
+  t.alike(await client.reboot(), { rebooting: true, success: true })
+  t.alike(await client.setLED(true), { success: true })
+  t.alike(await client.setPowerMode('normal'), { success: true })
+})
+
 test('setPowerTarget rejects unsafe device bounds before writing', async (t) => {
   const invalidBounds = [
     {},
@@ -432,6 +462,24 @@ test('setupPools validates and translates without exposing passwords', async (t)
   await t.exception(client.setupPools([{}, {}, {}, {}]), /ERR_POOLS_INVALID/)
 })
 
+test('setupPools with appendId false transmits the bare worker name', async (t) => {
+  let body
+  const api = apiFixture({ setPools: async value => { body = value } })
+  const client = new ProtoRigClient({ id: 'R2-001', api })
+  t.alike(await client.setupPools([{
+    url: 'stratum+tcp://pool:3333',
+    worker_name: '  account  '
+  }], false), { success: true })
+  t.alike(body, [{
+    url: 'stratum+tcp://pool:3333',
+    username: 'account',
+    password: '',
+    name: '',
+    priority: 0
+  }])
+  t.is(JSON.stringify(body).includes('R2-001'), false)
+})
+
 test('setupPools rejects every malformed entry and appendId before writing', async (t) => {
   const invalid = [
     [[null], true],
@@ -455,6 +503,62 @@ test('setupPools rejects every malformed entry and appendId before writing', asy
     await t.exception(client.setupPools(pools, appendId), /ERR_(POOL_ENTRY|APPEND_ID)_INVALID/)
   }
   t.is(writes, 0)
+})
+
+test('snapshot rejects malformed hashboard indexes', async (t) => {
+  for (const index of [undefined, -1, 1.5, '0', null]) {
+    const client = new ProtoRigClient({
+      id: 'R2-001',
+      cacheMs: 0,
+      api: apiFixture({
+        getTelemetry: async () => ({
+          miner: {
+            hashrate: { value: 95.5 },
+            temperature: { value: 65.5 },
+            power: { value: 3250 },
+            efficiency: { value: 34.03 }
+          },
+          hashboards: [{ index, temperature: { inlet: 45, outlet: 68, average: 56 } }]
+        })
+      })
+    })
+    await t.exception(client.getSnap(), /ERR_TELEMETRY_RESPONSE_INVALID/)
+  }
+})
+
+test('snapshot publishes only declared fan fields', async (t) => {
+  const client = new ProtoRigClient({
+    id: 'R2-001',
+    cacheMs: 0,
+    api: apiFixture({
+      getCooling: async () => ({
+        'cooling-status': {
+          fan_mode: 'Auto',
+          speed_percentage: 55,
+          fans: [{ rpm: 5000, serial: 'FAN-SECRET', firmware: '9.9.9' }]
+        }
+      })
+    })
+  })
+  const snap = await client.getSnap()
+  t.alike(snap.stats.cooling.fans, [{ rpm: 5000 }])
+  t.is(JSON.stringify(snap).includes('FAN-SECRET'), false)
+})
+
+test('snapshot bounds device authored error messages', async (t) => {
+  const client = new ProtoRigClient({
+    id: 'R2-001',
+    cacheMs: 0,
+    api: apiFixture({
+      getErrors: async () => [
+        { error_code: 'FanSlow', message: 'x'.repeat(5000) },
+        { error_code: 'Overheat', message: { nested: 'object' } }
+      ]
+    })
+  })
+  const snap = await client.getSnap()
+  t.is(snap.stats.errors[0].message.length, 259)
+  t.is(snap.stats.errors[1].message, undefined)
 })
 
 test('snapshot refuses externally configured pool URL userinfo without exposing it', async (t) => {

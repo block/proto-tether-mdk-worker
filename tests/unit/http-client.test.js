@@ -20,6 +20,7 @@ test('constructor validates and applies public API defaults', (t) => {
   t.exception(() => new ProtoHttpClient({ password: 'secret' }), /ERR_DEVICE_ADDRESS_REQUIRED/)
   t.exception(() => new ProtoHttpClient({ address: '192.0.2.10' }), /ERR_DEVICE_CREDENTIALS_REQUIRED/)
   t.exception(() => new ProtoHttpClient({ address: '192.0.2.10', password: 'secret', timeout: -1 }), /ERR_REQUEST_TIMEOUT_INVALID/)
+  t.exception(() => new ProtoHttpClient({ address: '192.0.2.10', password: 'secret', timeout: 2147483648 }), /ERR_REQUEST_TIMEOUT_INVALID/)
   t.exception(() => new ProtoHttpClient({ address: '192.0.2.10', password: 'secret', port: 0 }), /ERR_DEVICE_PORT_INVALID/)
 })
 
@@ -86,6 +87,76 @@ test('explicit 401 refreshes and retries exactly once', async (t) => {
   })
   t.alike(await client.request('/system'), { ok: true })
   t.is(calls.filter(([url]) => url.endsWith('/system')).length, 2)
+})
+
+test('a 401 on a write replays the identical body exactly once', async (t) => {
+  const sends = []
+  const fetchImpl = async (url, opts) => {
+    if (url.endsWith('/auth/refresh')) return response(200, { access_token: 'access-2' })
+    sends.push({ authorization: opts.headers.Authorization, body: opts.body })
+    if (opts.headers.Authorization === 'Bearer access-1') return response(401, { error: 'expired' })
+    return response(200, { accepted: true })
+  }
+  const client = new ProtoHttpClient({
+    address: '192.0.2.10',
+    accessToken: 'access-1',
+    refreshToken: 'refresh-1',
+    fetchImpl
+  })
+  const body = { power_target_watts: 2800 }
+  t.alike(await client.request('/mining/target', { method: 'POST', body }), { accepted: true })
+  t.is(sends.length, 2)
+  t.is(sends[0].body, sends[1].body)
+  t.alike(JSON.parse(sends[1].body), body)
+  t.is(sends[0].authorization, 'Bearer access-1')
+  t.is(sends[1].authorization, 'Bearer access-2')
+})
+
+test('a 401 with no renewal path preserves the configured access token', async (t) => {
+  let calls = 0
+  const client = new ProtoHttpClient({
+    address: '192.0.2.10',
+    accessToken: 'access-only',
+    fetchImpl: async () => {
+      calls++
+      return response(401, { error: 'expired' })
+    }
+  })
+  await t.exception(client.request('/system'), /ERR_AUTHENTICATION_FAILED/)
+  t.is(client.accessToken, 'access-only')
+  t.is(calls, 1)
+})
+
+test('unreachable devices keep their transport error through authentication', async (t) => {
+  const timedOut = new ProtoHttpClient({
+    address: '192.0.2.10',
+    password: 'password-secret',
+    timeout: 5,
+    fetchImpl: async (_url, opts) => new Promise((_resolve, reject) => {
+      opts.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })))
+    })
+  })
+  await t.exception(timedOut.request('/system'), /ERR_REQUEST_TIMEOUT/)
+
+  const unreachable = new ProtoHttpClient({
+    address: '192.0.2.10',
+    password: 'password-secret',
+    fetchImpl: async () => { throw new Error('ECONNREFUSED 192.0.2.10:80') }
+  })
+  await t.exception(unreachable.request('/system'), /ERR_DEVICE_CONNECTION/)
+
+  let attempts = 0
+  const refreshUnreachable = new ProtoHttpClient({
+    address: '192.0.2.10',
+    password: 'password-secret',
+    refreshToken: 'refresh-1',
+    fetchImpl: async () => {
+      attempts++
+      throw new Error('ECONNREFUSED 192.0.2.10:80')
+    }
+  })
+  await t.exception(refreshUnreachable.request('/system'), /ERR_DEVICE_CONNECTION/)
+  t.is(attempts, 1)
 })
 
 test('simultaneous 401 responses share one refresh', async (t) => {

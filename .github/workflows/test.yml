@@ -44,26 +44,6 @@ jobs:
           cache: npm
           cache-dependency-path: proto-tether-mdk-worker/package-lock.json
 
-      - name: Install MDK core dependencies
-        working-directory: mdk/backend/core
-        run: ./install-packages.sh
-
-      - name: Install Worker dependencies
-        working-directory: proto-tether-mdk-worker
-        run: npm ci --registry=https://registry.npmjs.org
-
-      - name: Run Worker tests
-        working-directory: proto-tether-mdk-worker
-        env:
-          MDK_REPO: ../mdk
-        run: npm test
-
-      - name: Run canonical Worker smoke test
-        working-directory: proto-tether-mdk-worker
-        env:
-          MDK_WORKER_BASE: ${{ github.workspace }}/mdk/backend/core/mdk-worker
-        run: node ../mdk/packages/mdk-skill/src/skills/mdk-worker-plugin/scripts/worker-smoke.mjs .
-
       - name: Reject non-public package registries
         working-directory: proto-tether-mdk-worker
         run: |
@@ -120,5 +100,36 @@ jobs:
             }
           }
 
+          // A lockfile the scan never actually walked must not report success.
+          if (checked === 0) {
+            console.error('package-lock integrity check failed: no resolved dependency entries were scanned')
+            process.exit(1)
+          }
+
+          if (local !== 1) {
+            console.error(`package-lock integrity check failed: expected exactly 1 local root entry, found ${local}`)
+            process.exit(1)
+          }
+
           console.log(`package-lock integrity check passed: ${checked} resolved entries allowlisted; ${local} local root entry`)
           NODE
+
+      - name: Install MDK core dependencies
+        working-directory: mdk/backend/core
+        run: ./install-packages.sh
+
+      - name: Install Worker dependencies
+        working-directory: proto-tether-mdk-worker
+        run: npm ci --ignore-scripts --registry=https://registry.npmjs.org
+
+      - name: Run Worker tests
+        working-directory: proto-tether-mdk-worker
+        env:
+          MDK_REPO: ../mdk
+        run: npm test
+
+      - name: Run canonical Worker smoke test
+        working-directory: proto-tether-mdk-worker
+        env:
+          MDK_WORKER_BASE: ${{ github.workspace }}/mdk/backend/core/mdk-worker
+        run: node ../mdk/packages/mdk-skill/src/skills/mdk-worker-plugin/scripts/worker-smoke.mjs .

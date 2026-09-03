@@ -67,11 +67,27 @@ Keep `repositoryDirectory` pointed at this repository. The host-supplied runtime
 
 ## Test
 
-Run all checks:
+The contract and integration tests load MDK core from a checkout of
+[`tetherto/mdk`](https://github.com/tetherto/mdk), so that repository must be
+present and its core dependencies installed before `npm test` will pass. Clone
+it alongside this one:
 
 ```bash
-npm test
+git clone https://github.com/tetherto/mdk ../mdk
+(cd ../mdk/backend/core && ./install-packages.sh)
 ```
+
+Then run all checks — lint, unit tests, and integration tests — pointing
+`MDK_REPO` at that checkout:
+
+```bash
+MDK_REPO=../mdk npm test
+```
+
+`MDK_REPO` defaults to `/tmp/mdk-latest` when unset. Individual suites are
+available as `npm run lint`, `npm run test:unit`, and `npm run test:integration`.
+CI runs the same commands against both the minimum supported MDK commit and
+upstream `main`.
 
 Run the local mock for development:
 
