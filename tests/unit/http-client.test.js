@@ -251,6 +251,20 @@ test('body read failures use stable redacted errors', async (t) => {
   t.is(bodyError.message.includes('upstream detail'), false)
 })
 
+test('malformed refresh success preserves its response error without a password fallback', async (t) => {
+  const client = new ProtoHttpClient({
+    address: '192.0.2.10',
+    accessToken: 'access-1',
+    refreshToken: 'refresh-1',
+    fetchImpl: async (url, opts) => {
+      if (url.endsWith('/auth/refresh')) return response(200, { access_token: '' })
+      if (opts.headers.Authorization === 'Bearer access-1') return response(401, { error: 'expired' })
+      return response(200, {})
+    }
+  })
+  await t.exception(client.request('/system'), /ERR_AUTHENTICATION_RESPONSE_INVALID/)
+})
+
 test('authentication success payloads require non-empty string tokens', async (t) => {
   const payloads = [
     { access_token: '' },

@@ -167,13 +167,32 @@ test('snapshot treats released-optional stale shares as zero and omits secrets',
   t.is(JSON.stringify(snap).includes('secret'), false)
 })
 
+test('share telemetry rejects fractional, unsafe, and overflowing counts', async (t) => {
+  const cases = [
+    ['getAcceptedShares', [{ accepted: 1.5 }]],
+    ['getRejectedShares', [{ rejected: Number.MAX_SAFE_INTEGER + 1 }]],
+    ['getAcceptedShares', [{ accepted: Number.MAX_SAFE_INTEGER }, { accepted: 1 }]]
+  ]
+
+  for (const [method, pools] of cases) {
+    const client = new ProtoRigClient({
+      id: 'R2-001',
+      cacheMs: 0,
+      api: apiFixture({ getPools: async () => pools })
+    })
+    await t.exception(client[method](), /ERR_POOLS_RESPONSE_INVALID/)
+  }
+})
+
 test('snapshot rejects malformed or overflowing present stale shares', async (t) => {
   const pool = { url: 'stratum+tcp://pool:3333', accepted: 10, rejected: 1 }
   const cases = [
     [{ ...pool, stale: '2' }],
     [{ ...pool, stale: -1 }],
+    [{ ...pool, stale: 0.5 }],
     [{ ...pool, stale: Infinity }],
-    [{ ...pool, stale: Number.MAX_VALUE }, { ...pool, stale: Number.MAX_VALUE }]
+    [{ ...pool, stale: Number.MAX_SAFE_INTEGER + 1 }],
+    [{ ...pool, stale: Number.MAX_SAFE_INTEGER }, { ...pool, stale: 1 }]
   ]
 
   for (const pools of cases) {
