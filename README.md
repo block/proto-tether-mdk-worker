@@ -123,6 +123,8 @@ Do not store credentials or pool passwords in source control. Load them from sec
 
 Most Proto rigs also serve the API over HTTPS, but they commonly present self-signed or otherwise unverifiable certificates. This worker calls `globalThis.fetch`, which verifies certificates by default, so setting `protocol: 'https'` against such a rig fails the TLS handshake and surfaces as `ERR_DEVICE_CONNECTION`. There is no CA or certificate-verification option yet; reaching those rigs today means supplying your own `fetchImpl` carrying an explicit TLS policy.
 
+Such a policy needs more than a trust anchor. Observed R2 certificates carry no Subject Alternative Name, and their Common Name is the device serial rather than a hostname, so hostname verification cannot succeed against an IP address even when the certificate itself is trusted. A working `fetchImpl` has to override `checkServerIdentity` — for example by pinning the certificate fingerprint, which is stable given these certificates are issued at manufacture with multi-year lifetimes.
+
 Note that unverified TLS buys encryption without authentication. It stops passive interception but not an active machine-in-the-middle on the same LAN, so it is not a substitute for network isolation.
 
 ## License
