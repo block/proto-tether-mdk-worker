@@ -131,3 +131,91 @@ test('read caches are instance-local', async (t) => {
   t.is(firstCalls, 1)
   t.is(secondCalls, 1)
 })
+
+test('reboot delegates once and returns success', async (t) => {
+  let calls = 0
+  const api = apiFixture({ reboot: async () => { calls++; return { rebooting: true } } })
+  const client = new ProtoRigClient({ id: 'R2-001', api })
+  t.alike(await client.reboot(), { success: true, rebooting: true })
+  t.is(calls, 1)
+})
+
+test('setPowerTarget checks device bounds before writing', async (t) => {
+  const writes = []
+  const api = apiFixture({ setPowerTarget: async watts => { writes.push(watts); return { power_target_watts: watts } } })
+  const client = new ProtoRigClient({ id: 'R2-001', api, cacheMs: 0 })
+  t.alike(await client.setPowerTarget(2800), { success: true, target: { power_target_watts: 2800 } })
+  await t.exception(client.setPowerTarget(399), /ERR_POWER_TARGET_OUT_OF_RANGE: 400-6000/)
+  t.alike(writes, [2800])
+})
+
+test('setPowerTarget clears only stale target cache after a successful write', async (t) => {
+  const api = apiFixture({ setPowerTarget: async watts => ({ power_target_watts: watts }) })
+  const client = new ProtoRigClient({ id: 'R2-001', api, cacheMs: 1000 })
+  client.reads.set('target', { promise: Promise.resolve({ power_target_watts: 3300 }), expires: Date.now() + 1000 })
+  client.reads.set('pools', { promise: Promise.resolve([]), expires: Date.now() + 1000 })
+  t.alike(await client.setPowerTarget(2800), { success: true, target: { power_target_watts: 2800 } })
+  t.is(client.reads.has('target'), false)
+  t.is(client.reads.has('pools'), true)
+})
+
+test('power mode and LED reject unsupported values before writing', async (t) => {
+  const calls = []
+  const api = apiFixture({
+    startMining: async () => { calls.push('start') },
+    stopMining: async () => { calls.push('stop') },
+    setLED: async value => { calls.push(['led', value]) }
+  })
+  const client = new ProtoRigClient({ id: 'R2-001', api })
+  await client.setPowerMode('normal')
+  await client.setPowerMode('sleep')
+  await client.setLED(true)
+  await t.exception(client.setPowerMode('high'), /ERR_SET_POWER_MODE_INVALID/)
+  await t.exception(client.setLED('true'), /ERR_SET_LED_ENABLED_INVALID/)
+  t.alike(calls, ['start', 'stop', ['led', true]])
+})
+
+test('setupPools validates and translates without exposing passwords', async (t) => {
+  let body
+  const api = apiFixture({ setPools: async value => { body = value } })
+  const client = new ProtoRigClient({ id: 'R2-001', api })
+  t.alike(await client.setupPools([{
+    url: 'stratum+tcp://pool:3333',
+    worker_name: 'account',
+    worker_password: 'secret',
+    pool: 'Primary'
+  }]), { success: true })
+  t.alike(body, [{
+    url: 'stratum+tcp://pool:3333',
+    username: 'account.R2-001',
+    password: 'secret',
+    name: 'Primary',
+    priority: 0
+  }])
+  await t.exception(client.setupPools([]), /ERR_POOLS_INVALID/)
+  await t.exception(client.setupPools([{}, {}, {}, {}]), /ERR_POOLS_INVALID/)
+})
+
+test('setupPools can omit appended device id and clears only stale pools cache', async (t) => {
+  const api = apiFixture({ setPools: async () => {} })
+  const client = new ProtoRigClient({ id: 'R2-001', api, cacheMs: 1000 })
+  client.reads.set('pools', { promise: Promise.resolve([]), expires: Date.now() + 1000 })
+  client.reads.set('target', { promise: Promise.resolve({ power_target_watts: 3300 }), expires: Date.now() + 1000 })
+  t.alike(await client.setupPools([{ url: 'stratum+tcp://pool:3333', worker_name: 'account' }], false), { success: true })
+  t.is(client.reads.has('pools'), false)
+  t.is(client.reads.has('target'), true)
+})
+
+test('commands bypass read cache and do not retry connection rejections', async (t) => {
+  let calls = 0
+  const api = apiFixture({
+    setLED: async () => {
+      calls++
+      throw new Error('ECONNRESET')
+    }
+  })
+  const client = new ProtoRigClient({ id: 'R2-001', api })
+  client._read = async () => { throw new Error('command used read cache') }
+  await t.exception(client.setLED(true), /ECONNRESET/)
+  t.is(calls, 1)
+})
