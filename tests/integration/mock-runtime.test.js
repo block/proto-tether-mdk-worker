@@ -1,6 +1,8 @@
 'use strict'
 
 const path = require('node:path')
+const http = require('node:http')
+const { spawn } = require('node:child_process')
 const test = require('brittle')
 const { createServer } = require('../../mock/server')
 
@@ -29,14 +31,31 @@ async function fixture (t, mockOpts = {}, deviceOpts = {}) {
   return { mock, instance }
 }
 
-test('V2 handlers translate real mock telemetry', async (t) => {
+test('V2 handlers translate real mock telemetry and normalized snapshot values', async (t) => {
   const { instance } = await fixture(t)
   t.is(await instance.telemetry.get('hashrate_avg')({}), 95.5)
   t.is(await instance.telemetry.get('power')({}), 3250)
+  t.is(await instance.telemetry.get('temperature')({}), 65.5)
+  t.is(await instance.telemetry.get('efficiency')({}), 34.03)
   t.is(await instance.telemetry.get('status')({}), 'mining')
+  t.is(await instance.telemetry.get('uptime')({}), 521000)
+  t.is(await instance.telemetry.get('accepted_shares')({}), 10)
+  t.is(await instance.telemetry.get('rejected_shares')({}), 1)
+  t.is(await instance.telemetry.get('power_target')({}), 3300)
   t.is(await instance.telemetry.get('fan_speed')({}), 5050)
   const snap = await instance.telemetry.get('snap')({})
+  t.is(snap.stats.uptime_ms, 521000)
+  t.is(snap.stats.hashrate_mhs.avg, 95500000)
+  t.is(snap.stats.temperature_c.max, 70)
+  t.is(snap.config.network_config.mode, 'dhcp')
+  t.is(snap.config.network_config.ip_address, '192.0.2.10')
+  t.is(snap.config.network_config.ip_gw, '192.0.2.1')
+  t.is(snap.config.network_config.ip_netmask, '255.255.255.0')
   t.is(snap.config.model, 'R2')
+  const serialized = JSON.stringify(snap)
+  t.is(serialized.includes('password'), false)
+  t.is(serialized.includes('token'), false)
+  t.is(serialized.includes('secret'), false)
 })
 
 test('V2 handlers execute real mock commands', async (t) => {
@@ -86,3 +105,75 @@ test('an ambiguous write connection outcome is never retried', async (t) => {
   await t.exception(instance.commands.get('setPowerTarget')({ watts: 2800 }), /ERR_DEVICE_CONNECTION/)
   t.is(mock.state.writeAttempts['/api/v1/mining/target'], 1)
 })
+
+test('mock returns a stable bad request for malformed request JSON', async (t) => {
+  const mock = createServer()
+  const address = await mock.ready
+  t.teardown(() => mock.close())
+  const response = await fetch(`http://127.0.0.1:${address.port}/api/v1/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{'
+  })
+
+  t.is(response.status, 400)
+  t.alike(await response.json(), { error: 'ERR_MOCK_BAD_REQUEST' })
+})
+
+test('mock returns a stable response when route handling rejects', async (t) => {
+  const mock = createServer()
+  const address = await mock.ready
+  t.teardown(() => mock.close())
+  const base = `http://127.0.0.1:${address.port}`
+  const login = await fetch(`${base}/api/v1/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ password: 'test-password' })
+  })
+  const token = (await login.json()).access_token
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 100)
+  let response
+  try {
+    response = await fetch(`${base}/api/v1/pools`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ pools: [] }),
+      signal: controller.signal
+    })
+  } finally {
+    clearTimeout(timer)
+  }
+
+  t.is(response.status, 500)
+  t.alike(await response.json(), { error: 'ERR_MOCK_REQUEST_FAILED' })
+})
+
+test('mock runner reports stable non-secret startup failures', async (t) => {
+  const blocker = http.createServer((req, res) => res.end('occupied'))
+  await new Promise(resolve => blocker.listen(0, '127.0.0.1', resolve))
+  t.teardown(() => blocker.close())
+
+  const child = spawn(process.execPath, [path.join(WORKER_DIR, 'scripts/run-mock.js')], {
+    env: { ...process.env, PORT: String(blocker.address().port), PROTO_RIG_PASSWORD: 'startup-secret' },
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+
+  const result = await collectChild(child)
+  t.is(result.code, 1)
+  t.ok(result.stderr.includes('ERR_MOCK_STARTUP_FAILED'))
+  t.is(result.stderr.includes('startup-secret'), false)
+  t.is(result.stdout.includes('startup-secret'), false)
+})
+
+function collectChild (child) {
+  return new Promise((resolve, reject) => {
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', chunk => { stdout += chunk })
+    child.stderr.on('data', chunk => { stderr += chunk })
+    child.on('error', reject)
+    child.on('close', code => resolve({ code, stdout, stderr }))
+  })
+}

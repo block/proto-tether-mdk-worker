@@ -69,12 +69,14 @@ function createServer (opts = {}) {
   const malformedPaths = new Set(opts.malformedPaths || [])
   const disconnectPaths = new Set(opts.disconnectPaths || [])
   const statusByPath = opts.statusByPath || {}
-  const server = http.createServer((req, res) => handle(req, res, state, {
-    delayMs: opts.delayMs || 0,
-    malformedPaths,
-    disconnectPaths,
-    statusByPath
-  }))
+  const server = http.createServer((req, res) => {
+    handle(req, res, state, {
+      delayMs: opts.delayMs || 0,
+      malformedPaths,
+      disconnectPaths,
+      statusByPath
+    }).catch(err => sendError(res, err))
+  })
 
   const ready = new Promise((resolve, reject) => {
     server.once('error', reject)
@@ -217,7 +219,7 @@ function readBody (req) {
       try {
         resolve(JSON.parse(text))
       } catch {
-        resolve(null)
+        reject(mockError(400))
       }
     })
   })
@@ -227,6 +229,18 @@ function sendJson (res, statusCode, body) {
   res.statusCode = statusCode
   res.setHeader('content-type', 'application/json')
   res.end(JSON.stringify(body))
+}
+
+function sendError (res, err) {
+  if (res.headersSent) return res.destroy()
+  const statusCode = err && err.statusCode === 400 ? 400 : 500
+  sendJson(res, statusCode, { error: statusCode === 400 ? 'ERR_MOCK_BAD_REQUEST' : 'ERR_MOCK_REQUEST_FAILED' })
+}
+
+function mockError (statusCode) {
+  const err = new Error(statusCode === 400 ? 'ERR_MOCK_BAD_REQUEST' : 'ERR_MOCK_REQUEST_FAILED')
+  err.statusCode = statusCode
+  return err
 }
 
 function sendMalformed (res) {

@@ -8,6 +8,9 @@ const mock = createServer({ host: '127.0.0.1', port, password })
 
 mock.ready.then(address => {
   console.log(`Proto Rig API v1 mock listening at http://${address.address}:${address.port}`)
+}).catch(() => {
+  console.error('ERR_MOCK_STARTUP_FAILED')
+  process.exitCode = 1
 })
 
 async function stop () {
