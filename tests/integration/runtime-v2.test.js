@@ -24,9 +24,58 @@ function uniqueAuthHeaders (state) {
   return [...new Set(seenAuthHeaders(state))]
 }
 
+function createCleanupStack (t) {
+  const cleanups = []
+  let cleaned = false
+
+  async function cleanupAll () {
+    if (cleaned) return
+    cleaned = true
+    await closeCleanups(cleanups)
+  }
+
+  t.teardown(cleanupAll)
+  return {
+    add: cleanup => {
+      cleanups.push(cleanup)
+    },
+    cleanupAll
+  }
+}
+
+async function closeCleanups (cleanups) {
+  const results = await Promise.allSettled([...cleanups].reverse().map(cleanup => Promise.resolve().then(cleanup)))
+  const errors = results.filter(result => result.status === 'rejected')
+  if (errors.length) throw errors[0].reason
+}
+
+function assertResponseEnvelope (t, response, requestEnvelope, action, deviceId) {
+  t.ok(typeof response.id === 'string')
+  t.is(response.id === requestEnvelope.id, false)
+  t.is(response.version, requestEnvelope.version)
+  t.is(response.type, MESSAGE_TYPES.RESPONSE)
+  t.is(response.action, action)
+  t.is(response.sender, 'proto-test')
+  t.is(response.target, requestEnvelope.sender)
+  t.is(response.deviceId, deviceId)
+}
+
+test('cleanup stack closes every resource and surfaces failures', async (t) => {
+  const calls = []
+  await t.exception(closeCleanups([
+    () => { calls.push('first') },
+    () => { calls.push('second'); throw new Error('close-two') },
+    async () => { calls.push('third') }
+  ]), /close-two/)
+  t.alike(calls, ['third', 'second', 'first'])
+})
+
 test('WorkerRuntimeV2 keeps device state isolated and publishes clean envelopes', async (t) => {
+  const cleanup = createCleanupStack(t)
   const first = createServer({ password: 'first-password', tokenSeq: 0 })
+  cleanup.add(() => first.close())
   const second = createServer({ password: 'second-password', tokenSeq: 100 })
+  cleanup.add(() => second.close())
   const [firstAddress, secondAddress] = await Promise.all([first.ready, second.ready])
 
   first.state.telemetry.miner.hashrate.value = 95.5
@@ -43,57 +92,71 @@ test('WorkerRuntimeV2 keeps device state isolated and publishes clean envelopes'
       { deviceId: 'proto-2', config: { address: '127.0.0.1', port: secondAddress.port, password: 'second-password' } }
     ]
   })
+  cleanup.add(() => runtime.stop())
 
   try {
     await runtime.start()
 
-    const identity = await runtime.handleRequest(request(ACTIONS.IDENTITY_REQUEST, null))
-    t.is(identity.action, ACTIONS.IDENTITY_RESPONSE)
+    const identityRequest = request(ACTIONS.IDENTITY_REQUEST, null)
+    const identity = await runtime.handleRequest(identityRequest)
+    assertResponseEnvelope(t, identity, identityRequest, ACTIONS.IDENTITY_RESPONSE, null)
+    t.is(identity.payload.workerId, 'proto-test')
     t.alike(identity.payload.devices.map(item => item.deviceId), ['proto-1', 'proto-2'])
 
-    const capability = await runtime.handleRequest(request(ACTIONS.CAPABILITY_REQUEST, null))
-    t.is(capability.action, ACTIONS.CAPABILITY_RESPONSE)
+    const capabilityRequest = request(ACTIONS.CAPABILITY_REQUEST, null)
+    const capability = await runtime.handleRequest(capabilityRequest)
+    assertResponseEnvelope(t, capability, capabilityRequest, ACTIONS.CAPABILITY_RESPONSE, null)
     t.is(capability.payload.contract.metadata.provider, 'proto')
     for (const entry of capability.payload.contract.capabilities.telemetry) t.is(entry.handler, undefined)
     for (const entry of capability.payload.contract.capabilities.commands) t.is(entry.handler, undefined)
 
-    const hashrate = await runtime.handleRequest(request(ACTIONS.TELEMETRY_PULL, 'proto-1', {
+    const hashrateRequest = request(ACTIONS.TELEMETRY_PULL, 'proto-1', {
       query: { type: 'hashrate_avg' }
-    }))
-    t.is(hashrate.action, ACTIONS.TELEMETRY_RESPONSE)
+    })
+    const hashrate = await runtime.handleRequest(hashrateRequest)
+    assertResponseEnvelope(t, hashrate, hashrateRequest, ACTIONS.TELEMETRY_RESPONSE, 'proto-1')
     t.is(hashrate.payload.deviceId, 'proto-1')
+    t.is(hashrate.payload.name, 'hashrate_avg')
     t.is(hashrate.payload.value, 95.5)
+    t.ok(typeof hashrate.payload.timestamp === 'number')
 
-    const power = await runtime.handleRequest(request(ACTIONS.TELEMETRY_PULL, 'proto-2', {
+    const powerRequest = request(ACTIONS.TELEMETRY_PULL, 'proto-2', {
       query: { type: 'power' }
-    }))
-    t.is(power.action, ACTIONS.TELEMETRY_RESPONSE)
+    })
+    const power = await runtime.handleRequest(powerRequest)
+    assertResponseEnvelope(t, power, powerRequest, ACTIONS.TELEMETRY_RESPONSE, 'proto-2')
     t.is(power.payload.deviceId, 'proto-2')
+    t.is(power.payload.name, 'power')
     t.is(power.payload.value, 2400)
+    t.ok(typeof power.payload.timestamp === 'number')
 
-    const led = await runtime.handleRequest(request(ACTIONS.COMMAND_REQUEST, 'proto-2', {
+    const ledRequest = request(ACTIONS.COMMAND_REQUEST, 'proto-2', {
       commandId: 'led-1',
       command: 'setLED',
       params: { enabled: true }
-    }))
-    t.is(led.action, ACTIONS.COMMAND_RESULT)
+    })
+    const led = await runtime.handleRequest(ledRequest)
+    assertResponseEnvelope(t, led, ledRequest, ACTIONS.COMMAND_RESULT, 'proto-2')
+    t.is(led.payload.commandId, 'led-1')
     t.is(led.payload.status, 'SUCCESS')
+    t.is(led.payload.result.success, true)
     t.is(second.state.led, true)
     t.is(first.state.led, false)
 
-    const target = await runtime.handleRequest(request(ACTIONS.COMMAND_REQUEST, 'proto-1', {
+    const targetRequest = request(ACTIONS.COMMAND_REQUEST, 'proto-1', {
       commandId: 'target-1',
       command: 'setPowerTarget',
       params: { watts: 200 }
-    }))
-    t.is(target.action, ACTIONS.COMMAND_RESULT)
+    })
+    const target = await runtime.handleRequest(targetRequest)
+    assertResponseEnvelope(t, target, targetRequest, ACTIONS.COMMAND_RESULT, 'proto-1')
+    t.is(target.payload.commandId, 'target-1')
     t.is(target.payload.status, 'FAILED')
     t.ok(/ERR_POWER_TARGET_OUT_OF_RANGE/.test(target.payload.error))
 
     t.alike(uniqueAuthHeaders(first.state), ['Bearer mock-access-1'])
     t.alike(uniqueAuthHeaders(second.state), ['Bearer mock-access-101'])
   } finally {
-    await runtime.stop()
-    await Promise.all([first.close(), second.close()])
+    await cleanup.cleanupAll()
   }
 })
