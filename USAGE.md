@@ -19,6 +19,8 @@ Device options:
 
 Never commit credentials, tokens, or pool passwords. Do not place them in examples, fixtures, or checked-in configuration.
 
+`type` may appear in host or smoke-test metadata. This worker does not consume `type`. `mdk-contract.json` does not declare a `type` config field. The table above enumerates all worker-consumed options.
+
 ## Telemetry
 
 The worker exposes these telemetry values from `mdk-contract.json`:
@@ -38,7 +40,9 @@ The worker exposes these telemetry values from `mdk-contract.json`:
 | `fan_speed` | `RPM` | number | Average speed of all cooling fans. |
 | `snap` | `` | object | Structured miner statistics and non-secret configuration metadata. |
 
-`status` uses MDK status values. Mining maps to `mining`. Stopped, curtailed, and powering off map to `sleeping`. Active device errors map to `error`. Other non-mining startup states map to `not_mining`.
+`status` uses MDK status values. Mining maps to `mining`. Stopped and Curtailed map to `sleeping`. PoweringOff maps to `not_mining`. Active device errors map to `error`. Other non-mining startup states map to `not_mining`.
+
+`power_mode` uses MDK power mode values. Stopped, Curtailed, and PoweringOff map to `sleep`. Other states map to `normal`.
 
 `snap` includes miner statistics, non-secret network metadata, pool URLs and usernames, power mode, power target, firmware version, product name, model, and serial number. It does not include passwords or bearer tokens.
 
