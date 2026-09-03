@@ -23,6 +23,22 @@ test('constructor validates and applies public API defaults', (t) => {
   t.exception(() => new ProtoHttpClient({ address: '192.0.2.10', password: 'secret', port: 0 }), /ERR_DEVICE_PORT_INVALID/)
 })
 
+test('constructor rejects non-string credentials and non-host-only addresses', (t) => {
+  for (const address of [42, '', '   ', 'user:secret@example.com', 'example.com/path', 'example.com?x=1', 'example.com#part', 'http://example.com', 'example.com:8080']) {
+    t.exception(() => new ProtoHttpClient({ address, password: 'secret' }), /ERR_DEVICE_ADDRESS_INVALID/)
+  }
+
+  for (const credentials of [
+    { password: 1 },
+    { password: '' },
+    { accessToken: {} },
+    { accessToken: 'token', refreshToken: 1 },
+    { password: 'secret', accessToken: '' }
+  ]) {
+    t.exception(() => new ProtoHttpClient({ address: 'example.com', ...credentials }), /ERR_DEVICE_CREDENTIALS_INVALID/)
+  }
+})
+
 test('request sends JSON and parses JSON without leaking credentials', async (t) => {
   let seen
   const client = new ProtoHttpClient({
@@ -159,6 +175,21 @@ test('body read failures use stable redacted errors', async (t) => {
   }), /ERR_DEVICE_CONNECTION/)
   t.is(bodyError.message.includes('token-secret'), false)
   t.is(bodyError.message.includes('upstream detail'), false)
+})
+
+test('authentication success payloads require non-empty string tokens', async (t) => {
+  const payloads = [
+    { access_token: '' },
+    { access_token: 'access', refresh_token: 1 }
+  ]
+  for (const payload of payloads) {
+    const client = new ProtoHttpClient({
+      address: '192.0.2.10',
+      password: 'password-secret',
+      fetchImpl: async () => response(200, payload)
+    })
+    await t.exception(client.request('/system'), /ERR_AUTHENTICATION_RESPONSE_INVALID/)
+  }
 })
 
 test('authentication and HTTP failures use stable redacted errors', async (t) => {

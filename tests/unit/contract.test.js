@@ -9,11 +9,25 @@ const WORKER_DIR = path.resolve(__dirname, '../..')
 
 test('contract loads every V2 handler and strips private paths', (t) => {
   const loaded = loadContract(WORKER_DIR)
-  t.is(loaded.entries.telemetry.size, 12)
+  t.is(loaded.entries.telemetry.size, 13)
   t.is(loaded.entries.commands.size, 5)
   t.is(loaded.contract.metadata.provider, 'proto')
+  t.ok(loaded.entries.telemetry.has('health'))
   for (const item of [
     ...loaded.publishedContract.capabilities.telemetry,
     ...loaded.publishedContract.capabilities.commands
   ]) t.is(item.handler, undefined)
+
+  for (const error of [
+    'ERR_DEVICE_ADDRESS_INVALID',
+    'ERR_DEVICE_CREDENTIALS_INVALID',
+    'ERR_CACHE_DURATION_INVALID',
+    'ERR_SYSTEM_RESPONSE_INVALID',
+    'ERR_NETWORK_RESPONSE_INVALID',
+    'ERR_MINING_RESPONSE_INVALID',
+    'ERR_POWER_TARGET_RESPONSE_INVALID',
+    'ERR_TELEMETRY_RESPONSE_INVALID',
+    'ERR_COOLING_RESPONSE_INVALID',
+    'ERR_APPEND_ID_INVALID'
+  ]) t.ok(loaded.publishedContract.capabilities.errors[error], `contract declares ${error}`)
 })

@@ -10,7 +10,7 @@ let clientPromise
 async function createClient () {
   const http = new ProtoHttpClient(opts)
   const client = new ProtoRigClient({ id, api: new ApiV1(http), cacheMs: opts.cacheMs })
-  logger('device %s configured at %s', id, http.baseUrl)
+  logger('device %s configured', id)
   return client
 }
 

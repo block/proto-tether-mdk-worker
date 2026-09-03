@@ -72,7 +72,7 @@ test('cleanup stack closes every resource and surfaces failures', async (t) => {
 
 test('WorkerRuntimeV2 keeps device state isolated and publishes clean envelopes', async (t) => {
   const cleanup = createCleanupStack(t)
-  const first = createServer({ password: 'first-password', tokenSeq: 0 })
+  const first = createServer({ password: 'first-device-password', tokenSeq: 0 })
   cleanup.add(() => first.close())
   const second = createServer({ password: 'second-password', tokenSeq: 100 })
   cleanup.add(() => second.close())
@@ -87,8 +87,19 @@ test('WorkerRuntimeV2 keeps device state isolated and publishes clean envelopes'
 
   const runtime = new WorkerRuntimeV2(WORKER_DIR, {
     workerId: 'proto-test',
+    env: { bearerToken: 'synthetic-env-bearer-secret' },
+    config: { refreshToken: 'synthetic-config-refresh-secret', url: 'https://secret.invalid' },
     devices: [
-      { deviceId: 'proto-1', config: { address: '127.0.0.1', port: firstAddress.port, password: 'first-password' } },
+      {
+        deviceId: 'proto-1',
+        config: {
+          address: '127.0.0.1',
+          port: firstAddress.port,
+          password: 'first-device-password',
+          accessToken: 'mock-access-1',
+          refreshToken: 'mock-refresh-1'
+        }
+      },
       { deviceId: 'proto-2', config: { address: '127.0.0.1', port: secondAddress.port, password: 'second-password' } }
     ]
   })
@@ -107,8 +118,38 @@ test('WorkerRuntimeV2 keeps device state isolated and publishes clean envelopes'
     const capability = await runtime.handleRequest(capabilityRequest)
     assertResponseEnvelope(t, capability, capabilityRequest, ACTIONS.CAPABILITY_RESPONSE, null)
     t.is(capability.payload.contract.metadata.provider, 'proto')
+    t.is(capability.payload.contract.capabilities.telemetry.length, 13)
+    t.ok(capability.payload.contract.capabilities.telemetry.some(entry => entry.name === 'health'))
     for (const entry of capability.payload.contract.capabilities.telemetry) t.is(entry.handler, undefined)
     for (const entry of capability.payload.contract.capabilities.commands) t.is(entry.handler, undefined)
+
+    const healthRequest = request(ACTIONS.TELEMETRY_PULL, 'proto-1', {
+      query: { type: 'health' }
+    })
+    const health = await runtime.handleRequest(healthRequest)
+    assertResponseEnvelope(t, health, healthRequest, ACTIONS.TELEMETRY_RESPONSE, 'proto-1')
+    t.is(health.payload.name, 'health')
+    t.alike(health.payload.value, { status: 'OK' })
+
+    const metricsRequest = request(ACTIONS.TELEMETRY_PULL, 'proto-1', {
+      query: { type: 'metrics' }
+    })
+    const metrics = await runtime.handleRequest(metricsRequest)
+    assertResponseEnvelope(t, metrics, metricsRequest, ACTIONS.TELEMETRY_RESPONSE, 'proto-1')
+    t.alike(metrics.payload.metrics.health, { status: 'OK' })
+    t.is(Object.keys(metrics.payload.metrics).length, 13)
+
+    const serializedTelemetry = `${JSON.stringify(health)}\n${JSON.stringify(metrics)}`.toLowerCase()
+    for (const forbidden of [
+      'first-device-password',
+      'mock-access-1',
+      'mock-refresh-1',
+      'synthetic-env-bearer-secret',
+      'synthetic-config-refresh-secret',
+      'accesstoken',
+      'refreshtoken',
+      'password'
+    ]) t.is(serializedTelemetry.includes(forbidden), false, `telemetry omits ${forbidden}`)
 
     const hashrateRequest = request(ACTIONS.TELEMETRY_PULL, 'proto-1', {
       query: { type: 'hashrate_avg' }

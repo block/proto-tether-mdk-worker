@@ -72,10 +72,34 @@ test('V2 handlers execute real mock commands', async (t) => {
   t.is(mock.state.rebooted, true)
 })
 
+test('invalid appendId is rejected before a real HTTP pool write', async (t) => {
+  const { mock, instance } = await fixture(t)
+  await t.exception(instance.commands.get('setupPools')({
+    pools: [{ url: 'stratum+tcp://pool:3333', worker_name: 'worker' }],
+    appendId: 'false'
+  }), /ERR_APPEND_ID_INVALID/)
+  t.is(mock.state.writeAttempts['/api/v1/pools'] || 0, 0)
+})
+
 test('expired token renews once and returns telemetry', async (t) => {
   const { mock, instance } = await fixture(t, { expireFirstToken: true })
   t.is(await instance.telemetry.get('power')({}), 3250)
   t.is(mock.state.loginCount, 1)
+  t.is(mock.state.refreshCount, 1)
+})
+
+test('concurrent real HTTP requests all reject a revoked token and share one refresh', async (t) => {
+  const { mock, instance } = await fixture(t, { expireFirstToken: true })
+  t.alike(await Promise.all([
+    instance.telemetry.get('power')({}),
+    instance.telemetry.get('status')({}),
+    instance.telemetry.get('fan_speed')({})
+  ]), [3250, 'mining', 5050])
+
+  const firstTokenUses = mock.state.requests.filter(request => request.authorization === 'Bearer mock-access-1').length
+  const renewedTokenUses = mock.state.requests.filter(request => request.authorization === 'Bearer mock-access-2').length
+  t.ok(firstTokenUses >= 3)
+  t.ok(renewedTokenUses >= firstTokenUses)
   t.is(mock.state.refreshCount, 1)
 })
 
@@ -98,6 +122,23 @@ test('delayed and malformed reads return stable errors', async (t) => {
 
   const unavailable = await fixture(t, { statusByPath: { '/api/v1/telemetry': 503 } })
   await t.exception(unavailable.instance.telemetry.get('power')({}), /ERR_HTTP_RESPONSE: 503/)
+})
+
+test('valid JSON malformed telemetry returns stable real-stack validation errors', async (t) => {
+  const scalar = await fixture(t)
+  scalar.mock.state.telemetry.miner.power.value = Infinity
+  await t.exception(scalar.instance.telemetry.get('power')({}), /ERR_TELEMETRY_RESPONSE_INVALID/)
+
+  const snapshot = await fixture(t)
+  snapshot.mock.state.telemetry.hashboards = {}
+  await t.exception(snapshot.instance.telemetry.get('snap')({}), /ERR_TELEMETRY_RESPONSE_INVALID/)
+})
+
+test('malformed power bounds fail closed before a real HTTP write', async (t) => {
+  const { mock, instance } = await fixture(t)
+  delete mock.state.target.power_target_min_watts
+  await t.exception(instance.commands.get('setPowerTarget')({ watts: 2800 }), /ERR_POWER_TARGET_RESPONSE_INVALID/)
+  t.is(mock.state.writeAttempts['/api/v1/mining/target'] || 0, 0)
 })
 
 test('an ambiguous write connection outcome is never retried', async (t) => {

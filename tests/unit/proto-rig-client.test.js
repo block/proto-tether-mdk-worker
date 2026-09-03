@@ -43,6 +43,78 @@ test('telemetry methods normalize public API values', async (t) => {
   t.is(await client.getFanSpeed(), 5050)
 })
 
+test('scalar getters reject malformed successful values with stable errors', async (t) => {
+  const cases = [
+    ['getHashrateAvg', { getTelemetry: async () => ({ miner: { hashrate: { value: '95.5' } } }) }, /ERR_TELEMETRY_RESPONSE_INVALID/],
+    ['getPower', { getTelemetry: async () => ({ miner: { power: { value: Infinity } } }) }, /ERR_TELEMETRY_RESPONSE_INVALID/],
+    ['getTemperature', { getTelemetry: async () => ({ miner: { temperature: null } }) }, /ERR_TELEMETRY_RESPONSE_INVALID/],
+    ['getEfficiency', { getTelemetry: async () => ({ miner: {} }) }, /ERR_TELEMETRY_RESPONSE_INVALID/],
+    ['getStatus', { getMiningStatus: async () => ({ status: 1 }) }, /ERR_MINING_RESPONSE_INVALID/],
+    ['getUptime', { getMiningStatus: async () => ({ status: 'Mining' }) }, /ERR_MINING_RESPONSE_INVALID/],
+    ['getUptime', { getMiningStatus: async () => ({ status: 'Mining', reboot_uptime_s: Number.MAX_VALUE }) }, /ERR_MINING_RESPONSE_INVALID/],
+    ['getAcceptedShares', { getPools: async () => [{ accepted: '10' }] }, /ERR_POOLS_RESPONSE_INVALID/],
+    ['getAcceptedShares', { getPools: async () => [{ accepted: Number.MAX_VALUE }, { accepted: Number.MAX_VALUE }] }, /ERR_POOLS_RESPONSE_INVALID/],
+    ['getRejectedShares', { getPools: async () => [{ rejected: Infinity }] }, /ERR_POOLS_RESPONSE_INVALID/],
+    ['getPowerTarget', { getMiningTarget: async () => ({ power_target_watts: '3300' }) }, /ERR_POWER_TARGET_RESPONSE_INVALID/],
+    ['getFanSpeed', { getCooling: async () => ({ 'cooling-status': { fans: [{ rpm: '5000' }] } }) }, /ERR_COOLING_RESPONSE_INVALID/],
+    ['getFanSpeed', { getCooling: async () => ({ 'cooling-status': { fans: [{ rpm: Number.MAX_VALUE }, { rpm: Number.MAX_VALUE }] } }) }, /ERR_COOLING_RESPONSE_INVALID/]
+  ]
+
+  for (const [method, overrides, error] of cases) {
+    const client = new ProtoRigClient({ id: 'R2-001', api: apiFixture(overrides), cacheMs: 0 })
+    await t.exception(client[method](), error, `${method} rejects malformed success`)
+  }
+})
+
+test('snapshot rejects malformed nested successful inputs with stable errors', async (t) => {
+  const cases = [
+    [{
+      getTelemetry: async () => ({
+        miner: {
+          hashrate: { value: 95.5 },
+          temperature: { value: 65.5 },
+          power: { value: 3250 },
+          efficiency: { value: 34.03 }
+        },
+        hashboards: {}
+      })
+    }, /ERR_TELEMETRY_RESPONSE_INVALID/],
+    [{
+      getTelemetry: async () => ({
+        miner: {
+          hashrate: { value: Number.MAX_VALUE },
+          temperature: { value: 65.5 },
+          power: { value: 3250 },
+          efficiency: { value: 34.03 }
+        },
+        hashboards: []
+      })
+    }, /ERR_TELEMETRY_RESPONSE_INVALID/],
+    [{
+      getTelemetry: async () => ({
+        miner: {
+          hashrate: { value: 95.5 },
+          temperature: { value: 65.5 },
+          power: { value: 3250 },
+          efficiency: { value: 34.03 }
+        },
+        hashboards: [{ index: 0, temperature: { inlet: 45, outlet: Infinity, average: 56 } }]
+      })
+    }, /ERR_TELEMETRY_RESPONSE_INVALID/],
+    [{ getPools: async () => [null] }, /ERR_POOLS_RESPONSE_INVALID/],
+    [{ getErrors: async () => [null] }, /ERR_ERRORS_RESPONSE_INVALID/],
+    [{ getMiningTarget: async () => ({ power_target_watts: Infinity }) }, /ERR_POWER_TARGET_RESPONSE_INVALID/],
+    [{ getSystemInfo: async () => ({ 'system-info': null }) }, /ERR_SYSTEM_RESPONSE_INVALID/],
+    [{ getNetworkInformation: async () => ({ 'network-info': { dhcp: 'yes' } }) }, /ERR_NETWORK_RESPONSE_INVALID/],
+    [{ getCooling: async () => ({ 'cooling-status': { fans: {} } }) }, /ERR_COOLING_RESPONSE_INVALID/]
+  ]
+
+  for (const [overrides, error] of cases) {
+    const client = new ProtoRigClient({ id: 'R2-001', api: apiFixture(overrides), cacheMs: 0 })
+    await t.exception(client.getSnap(), error)
+  }
+})
+
 test('snapshot uses the common miner shape and omits secrets', async (t) => {
   const client = new ProtoRigClient({ id: 'R2-001', api: apiFixture(), cacheMs: 0 })
   const snap = await client.getSnap()
@@ -112,6 +184,14 @@ test('rejected reads are evicted so later reads can retry', async (t) => {
   t.is(calls, 2)
 })
 
+test('cacheMs must be a finite duration from zero through 5000 milliseconds', (t) => {
+  for (const cacheMs of [-1, Infinity, NaN, 5000.1, '100']) {
+    t.exception(() => new ProtoRigClient({ id: 'R2-001', api: apiFixture(), cacheMs }), /ERR_CACHE_DURATION_INVALID/)
+  }
+  t.is(new ProtoRigClient({ id: 'R2-001', api: apiFixture(), cacheMs: 0 }).cacheMs, 0)
+  t.is(new ProtoRigClient({ id: 'R2-001', api: apiFixture(), cacheMs: 5000 }).cacheMs, 5000)
+})
+
 test('read caches are instance-local', async (t) => {
   let firstCalls = 0
   let secondCalls = 0
@@ -132,31 +212,166 @@ test('read caches are instance-local', async (t) => {
   t.is(secondCalls, 1)
 })
 
-test('reboot delegates once and returns success', async (t) => {
+test('reboot delegates once and invalidates every read cache entry', async (t) => {
   let calls = 0
   const api = apiFixture({ reboot: async () => { calls++; return { rebooting: true } } })
   const client = new ProtoRigClient({ id: 'R2-001', api })
+  for (const key of ['mining', 'telemetry', 'pools', 'errors', 'target', 'cooling', 'system', 'network']) {
+    client.reads.set(key, { promise: Promise.resolve({}), expires: Date.now() + 1000 })
+  }
   t.alike(await client.reboot(), { success: true, rebooting: true })
   t.is(calls, 1)
+  t.is(client.reads.size, 0)
 })
 
-test('setPowerTarget checks device bounds before writing', async (t) => {
+test('setPowerTarget normalizes the exact transmitted integer before checking bounds', async (t) => {
   const writes = []
   const api = apiFixture({ setPowerTarget: async watts => { writes.push(watts); return { power_target_watts: watts } } })
   const client = new ProtoRigClient({ id: 'R2-001', api, cacheMs: 0 })
-  t.alike(await client.setPowerTarget(2800), { success: true, target: { power_target_watts: 2800 } })
-  await t.exception(client.setPowerTarget(399), /ERR_POWER_TARGET_OUT_OF_RANGE: 400-6000/)
-  t.alike(writes, [2800])
+  t.alike(await client.setPowerTarget(399.6), { success: true, target: { power_target_watts: 400 } })
+  await t.exception(client.setPowerTarget(399.4), /ERR_POWER_TARGET_OUT_OF_RANGE: 400-6000/)
+  t.alike(writes, [400])
 })
 
-test('setPowerTarget clears only stale target cache after a successful write', async (t) => {
+test('setPowerTarget rejects unsafe device bounds before writing', async (t) => {
+  const invalidBounds = [
+    {},
+    { power_target_min_watts: '400', power_target_max_watts: 6000 },
+    { power_target_min_watts: 400, power_target_max_watts: Infinity },
+    { power_target_min_watts: 6000, power_target_max_watts: 400 },
+    { power_target_min_watts: 0, power_target_max_watts: 6000 },
+    { power_target_min_watts: 400, power_target_max_watts: Number.MAX_SAFE_INTEGER + 1 }
+  ]
+
+  for (const target of invalidBounds) {
+    let writes = 0
+    const api = apiFixture({
+      getMiningTarget: async () => target,
+      setPowerTarget: async () => { writes++ }
+    })
+    const client = new ProtoRigClient({ id: 'R2-001', api, cacheMs: 0 })
+    await t.exception(client.setPowerTarget(2800), /ERR_POWER_TARGET_RESPONSE_INVALID/)
+    t.is(writes, 0)
+  }
+})
+
+test('setPowerTarget invalidates target and mining telemetry around a successful write', async (t) => {
   const api = apiFixture({ setPowerTarget: async watts => ({ power_target_watts: watts }) })
   const client = new ProtoRigClient({ id: 'R2-001', api, cacheMs: 1000 })
-  client.reads.set('target', { promise: Promise.resolve({ power_target_watts: 3300 }), expires: Date.now() + 1000 })
-  client.reads.set('pools', { promise: Promise.resolve([]), expires: Date.now() + 1000 })
+  for (const key of ['target', 'mining', 'telemetry', 'pools']) {
+    client.reads.set(key, { promise: Promise.resolve({}), expires: Date.now() + 1000 })
+  }
   t.alike(await client.setPowerTarget(2800), { success: true, target: { power_target_watts: 2800 } })
   t.is(client.reads.has('target'), false)
+  t.is(client.reads.has('mining'), false)
+  t.is(client.reads.has('telemetry'), false)
   t.is(client.reads.has('pools'), true)
+})
+
+test('reads after rejected writes bypass stale command-affected cache entries', async (t) => {
+  let rebootPower = 3000
+  let rebootReads = 0
+  const rebootClient = new ProtoRigClient({
+    id: 'R2-001',
+    cacheMs: 5000,
+    api: apiFixture({
+      getTelemetry: async () => {
+        rebootReads++
+        return { miner: { power: { value: rebootPower } } }
+      },
+      reboot: async () => {
+        rebootPower = 3100
+        throw new Error('ERR_DEVICE_CONNECTION')
+      }
+    })
+  })
+  t.is(await rebootClient.getPower(), 3000)
+  await t.exception(rebootClient.reboot(), /ERR_DEVICE_CONNECTION/)
+  t.is(await rebootClient.getPower(), 3100)
+  t.is(rebootReads, 2)
+
+  let miningStatus = 'Mining'
+  let miningReads = 0
+  let errorReads = 0
+  const modeClient = new ProtoRigClient({
+    id: 'R2-001',
+    cacheMs: 5000,
+    api: apiFixture({
+      getMiningStatus: async () => { miningReads++; return { status: miningStatus, reboot_uptime_s: 521 } },
+      getErrors: async () => { errorReads++; return [] },
+      stopMining: async () => {
+        miningStatus = 'Stopped'
+        throw new Error('ERR_DEVICE_CONNECTION')
+      }
+    })
+  })
+  t.is(await modeClient.getStatus(), 'mining')
+  await t.exception(modeClient.setPowerMode('sleep'), /ERR_DEVICE_CONNECTION/)
+  t.is(await modeClient.getStatus(), 'sleeping')
+  t.is(miningReads, 2)
+  t.is(errorReads, 2)
+
+  let target = 3300
+  let targetReads = 0
+  const targetClient = new ProtoRigClient({
+    id: 'R2-001',
+    cacheMs: 5000,
+    api: apiFixture({
+      getMiningTarget: async () => {
+        targetReads++
+        return { power_target_watts: target, power_target_min_watts: 400, power_target_max_watts: 6000 }
+      },
+      setPowerTarget: async watts => {
+        target = watts
+        throw new Error('ERR_DEVICE_CONNECTION')
+      }
+    })
+  })
+  t.is(await targetClient.getPowerTarget(), 3300)
+  await t.exception(targetClient.setPowerTarget(2800), /ERR_DEVICE_CONNECTION/)
+  t.is(await targetClient.getPowerTarget(), 2800)
+  t.is(targetReads, 3)
+
+  let accepted = 10
+  let poolReads = 0
+  const poolsClient = new ProtoRigClient({
+    id: 'R2-001',
+    cacheMs: 5000,
+    api: apiFixture({
+      getPools: async () => {
+        poolReads++
+        return [{ url: 'stratum+tcp://pool:3333', accepted, rejected: 1, stale: 2 }]
+      },
+      setPools: async () => {
+        accepted = 20
+        throw new Error('ERR_DEVICE_CONNECTION')
+      }
+    })
+  })
+  t.is(await poolsClient.getAcceptedShares(), 10)
+  await t.exception(poolsClient.setupPools([{ url: 'stratum+tcp://pool:3333', worker_name: 'worker' }]), /ERR_DEVICE_CONNECTION/)
+  t.is(await poolsClient.getAcceptedShares(), 20)
+  t.is(poolReads, 2)
+})
+
+test('finally invalidation evicts a read repopulated during an ambiguous write', async (t) => {
+  let status = 'Mining'
+  let reads = 0
+  let rejectWrite
+  const api = apiFixture({
+    getMiningStatus: async () => { reads++; return { status, reboot_uptime_s: 521 } },
+    startMining: async () => new Promise((_resolve, reject) => { rejectWrite = reject })
+  })
+  const client = new ProtoRigClient({ id: 'R2-001', api, cacheMs: 5000 })
+  const command = client.setPowerMode('normal')
+  await Promise.resolve()
+  status = 'Stopped'
+  t.is(await client.getPowerMode(), 'sleep')
+  rejectWrite(new Error('ERR_DEVICE_CONNECTION'))
+  await t.exception(command, /ERR_DEVICE_CONNECTION/)
+  status = 'Mining'
+  t.is(await client.getPowerMode(), 'normal')
+  t.is(reads, 2)
 })
 
 test('power mode and LED reject unsupported values before writing', async (t) => {
@@ -180,8 +395,8 @@ test('setupPools validates and translates without exposing passwords', async (t)
   const api = apiFixture({ setPools: async value => { body = value } })
   const client = new ProtoRigClient({ id: 'R2-001', api })
   t.alike(await client.setupPools([{
-    url: 'stratum+tcp://pool:3333',
-    worker_name: 'account',
+    url: '  stratum+tcp://pool:3333  ',
+    worker_name: '  account  ',
     worker_password: 'secret',
     pool: 'Primary'
   }]), { success: true })
@@ -196,17 +411,91 @@ test('setupPools validates and translates without exposing passwords', async (t)
   await t.exception(client.setupPools([{}, {}, {}, {}]), /ERR_POOLS_INVALID/)
 })
 
-test('setupPools can omit appended device id and clears only stale pools cache', async (t) => {
+test('setupPools rejects every malformed entry and appendId before writing', async (t) => {
+  const invalid = [
+    [[null], true],
+    [[{ url: '', worker_name: 'worker' }], true],
+    [[{ url: '   ', worker_name: 'worker' }], true],
+    [[{ url: 'pool.example:3333', worker_name: 'worker' }], true],
+    [[{ url: 'stratum+tcp://pool:3333', worker_name: '' }], true],
+    [[{ url: 'stratum+tcp://pool:3333', worker_name: '   ' }], true],
+    [[{ url: 'stratum+tcp://user:pool-secret@pool:3333', worker_name: 'worker' }], true],
+    [[{ url: 'stratum+tcp://pool:3333', worker_name: 'worker', worker_password: 1 }], true],
+    [[{ url: 'stratum+tcp://pool:3333', worker_name: 'worker', pool: false }], true],
+    [[{ url: 'stratum+tcp://pool:3333', worker_name: 'worker' }], 'false']
+  ]
+  let writes = 0
+  const client = new ProtoRigClient({
+    id: 'R2-001',
+    api: apiFixture({ setPools: async () => { writes++ } })
+  })
+
+  for (const [pools, appendId] of invalid) {
+    await t.exception(client.setupPools(pools, appendId), /ERR_(POOL_ENTRY|APPEND_ID)_INVALID/)
+  }
+  t.is(writes, 0)
+})
+
+test('snapshot refuses externally configured pool URL userinfo without exposing it', async (t) => {
+  const client = new ProtoRigClient({
+    id: 'R2-001',
+    api: apiFixture({
+      getPools: async () => [{
+        url: 'stratum+tcp://worker:returned-pool-secret@pool:3333',
+        user: 'worker',
+        accepted: 10,
+        rejected: 1,
+        stale: 2,
+        status: 'Active'
+      }]
+    }),
+    cacheMs: 0
+  })
+  let failure
+  await t.exception(client.getSnap().catch(err => {
+    failure = err
+    throw err
+  }), /ERR_POOLS_RESPONSE_INVALID/)
+  t.is(failure.message.includes('returned-pool-secret'), false)
+})
+
+test('setupPools invalidates pool, mining, and error caches only', async (t) => {
   const api = apiFixture({ setPools: async () => {} })
   const client = new ProtoRigClient({ id: 'R2-001', api, cacheMs: 1000 })
-  client.reads.set('pools', { promise: Promise.resolve([]), expires: Date.now() + 1000 })
-  client.reads.set('target', { promise: Promise.resolve({ power_target_watts: 3300 }), expires: Date.now() + 1000 })
+  for (const key of ['pools', 'mining', 'errors', 'target']) {
+    client.reads.set(key, { promise: Promise.resolve({}), expires: Date.now() + 1000 })
+  }
   t.alike(await client.setupPools([{ url: 'stratum+tcp://pool:3333', worker_name: 'account' }], false), { success: true })
   t.is(client.reads.has('pools'), false)
+  t.is(client.reads.has('mining'), false)
+  t.is(client.reads.has('errors'), false)
   t.is(client.reads.has('target'), true)
 })
 
-test('commands bypass read cache and do not retry connection rejections', async (t) => {
+test('all commands bypass _read while power target fetches bounds directly', async (t) => {
+  const calls = []
+  const api = apiFixture({
+    reboot: async () => { calls.push('reboot') },
+    startMining: async () => { calls.push('start') },
+    getMiningTarget: async () => {
+      calls.push('bounds')
+      return { power_target_watts: 3300, power_target_min_watts: 400, power_target_max_watts: 6000 }
+    },
+    setPowerTarget: async () => { calls.push('target') },
+    setLED: async () => { calls.push('led') },
+    setPools: async () => { calls.push('pools') }
+  })
+  const client = new ProtoRigClient({ id: 'R2-001', api })
+  client._read = async () => { throw new Error('command used read cache') }
+  await client.reboot()
+  await client.setPowerMode('normal')
+  await client.setPowerTarget(2800)
+  await client.setLED(true)
+  await client.setupPools([{ url: 'stratum+tcp://pool:3333', worker_name: 'worker' }])
+  t.alike(calls, ['reboot', 'start', 'bounds', 'target', 'led', 'pools'])
+})
+
+test('commands do not retry connection rejections', async (t) => {
   let calls = 0
   const api = apiFixture({
     setLED: async () => {
@@ -215,7 +504,6 @@ test('commands bypass read cache and do not retry connection rejections', async 
     }
   })
   const client = new ProtoRigClient({ id: 'R2-001', api })
-  client._read = async () => { throw new Error('command used read cache') }
   await t.exception(client.setLED(true), /ECONNRESET/)
   t.is(calls, 1)
 })

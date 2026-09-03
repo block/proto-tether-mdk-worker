@@ -3,12 +3,16 @@
 const http = require('node:http')
 
 function createState (opts = {}) {
+  const tokenSeq = opts.tokenSeq || 0
+  const refreshSeq = opts.refreshSeq || 0
   return {
     password: opts.password || 'test-password',
-    tokenSeq: opts.tokenSeq || 0,
-    refreshSeq: opts.refreshSeq || 0,
+    tokenSeq,
+    refreshSeq,
     expireFirstToken: opts.expireFirstToken === true,
-    firstTokenRejected: false,
+    currentAccessToken: `mock-access-${tokenSeq + 1}`,
+    currentRefreshToken: `mock-refresh-${refreshSeq + 1}`,
+    revokedAccessTokens: new Set(),
     requests: [],
     loginCount: 0,
     refreshCount: 0,
@@ -103,11 +107,6 @@ async function handle (req, res, state, controls) {
 
   if (!authenticated(req, state)) return sendJson(res, 401, { error: 'unauthorized' })
 
-  if (state.expireFirstToken && !state.firstTokenRejected && bearer(req) === 'mock-access-1') {
-    state.firstTokenRejected = true
-    return sendJson(res, 401, { error: 'expired' })
-  }
-
   if (controls.statusByPath[pathname]) return sendJson(res, controls.statusByPath[pathname], { error: 'mock status' })
   if (controls.malformedPaths.has(pathname)) return sendMalformed(res)
   if (controls.disconnectPaths.has(pathname) && req.method !== 'GET' && req.method !== 'HEAD') {
@@ -176,30 +175,36 @@ function login (res, state, body) {
   state.loginCount++
   state.tokenSeq++
   state.refreshSeq++
+  state.currentAccessToken = `mock-access-${state.tokenSeq}`
+  state.currentRefreshToken = `mock-refresh-${state.refreshSeq}`
+  if (state.expireFirstToken && state.loginCount === 1) {
+    state.revokedAccessTokens.add(state.currentAccessToken)
+  }
   return sendJson(res, 200, {
-    access_token: `mock-access-${state.tokenSeq}`,
-    refresh_token: `mock-refresh-${state.refreshSeq}`
+    access_token: state.currentAccessToken,
+    refresh_token: state.currentRefreshToken
   })
 }
 
 function refresh (res, state, body) {
-  if (!body || typeof body.refresh_token !== 'string' || !body.refresh_token.startsWith('mock-refresh-')) {
+  if (!body || body.refresh_token !== state.currentRefreshToken) {
     return sendJson(res, 401, { error: 'unauthorized' })
   }
+  state.revokedAccessTokens.add(state.currentAccessToken)
   state.refreshCount++
   state.tokenSeq++
   state.refreshSeq++
+  state.currentAccessToken = `mock-access-${state.tokenSeq}`
+  state.currentRefreshToken = `mock-refresh-${state.refreshSeq}`
   return sendJson(res, 200, {
-    access_token: `mock-access-${state.tokenSeq}`,
-    refresh_token: `mock-refresh-${state.refreshSeq}`
+    access_token: state.currentAccessToken,
+    refresh_token: state.currentRefreshToken
   })
 }
 
 function authenticated (req, state) {
   const token = bearer(req)
-  if (!token) return false
-  if (token === 'mock-access-1' || token === 'mock-access-2') return true
-  return token === `mock-access-${state.tokenSeq}`
+  return Boolean(token && token === state.currentAccessToken && !state.revokedAccessTokens.has(token))
 }
 
 function bearer (req) {

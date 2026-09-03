@@ -19,7 +19,8 @@
       { "name": "power_mode", "unit": "", "type": "string", "handler": "src/telemetry/power-mode.js", "description": "Current Tether MDK power mode: normal while operating and sleep while stopped or curtailed." },
       { "name": "power_target", "unit": "W", "type": "number", "handler": "src/telemetry/power-target.js", "description": "Configured mining power target in watts." },
       { "name": "fan_speed", "unit": "RPM", "type": "number", "handler": "src/telemetry/fan-speed.js", "description": "Average speed of all cooling fans." },
-      { "name": "snap", "unit": "", "type": "object", "handler": "src/telemetry/snap.js", "description": "Structured miner statistics and non-secret configuration metadata." }
+      { "name": "snap", "unit": "", "type": "object", "handler": "src/telemetry/snap.js", "description": "Structured miner statistics and non-secret configuration metadata." },
+      { "name": "health", "unit": "", "type": "object", "handler": "src/telemetry/health.js", "description": "Worker-owned health status containing no device configuration or credentials." }
     ],
     "commands": [
       {
@@ -80,27 +81,37 @@
     "errors": {
       "ERR_DEVICE_ID_REQUIRED": "The Tether MDK device ID is missing.",
       "ERR_DEVICE_ADDRESS_REQUIRED": "The device address is missing.",
+      "ERR_DEVICE_ADDRESS_INVALID": "The device address must be a non-empty host-only string without userinfo, a port, path, query, or fragment.",
       "ERR_DEVICE_CREDENTIALS_REQUIRED": "The device password or access token is missing.",
+      "ERR_DEVICE_CREDENTIALS_INVALID": "Configured password and token values must be non-empty strings.",
       "ERR_DEVICE_PORT_INVALID": "The device port must be an integer from 1 through 65535.",
       "ERR_PROTOCOL_UNSUPPORTED": "The configured protocol must be HTTP or HTTPS.",
       "ERR_FETCH_REQUIRED": "No HTTP fetch implementation is available.",
       "ERR_HTTP_CLIENT_REQUIRED": "The API adapter needs an HTTP client.",
       "ERR_API_CLIENT_REQUIRED": "The worker-facing client needs an API adapter.",
+      "ERR_CACHE_DURATION_INVALID": "The read cache duration must be a finite number from zero through 5000 milliseconds.",
       "ERR_REQUEST_TIMEOUT_INVALID": "The request timeout must be a positive finite number of milliseconds.",
       "ERR_REQUEST_TIMEOUT": "The firmware request exceeded the configured timeout.",
       "ERR_DEVICE_CONNECTION": "The worker could not connect to the firmware API. A write may have an unknown physical outcome.",
       "ERR_HTTP_RESPONSE": "The firmware returned a non-success HTTP status. A write may have an unknown physical outcome.",
       "ERR_RESPONSE_INVALID_JSON": "The firmware returned malformed JSON. A write may have an unknown physical outcome.",
       "ERR_AUTHENTICATION_FAILED": "The firmware rejected authentication.",
-      "ERR_AUTHENTICATION_RESPONSE_INVALID": "The authentication response did not contain an access token.",
-      "ERR_ERRORS_RESPONSE_INVALID": "The firmware errors response was not an array.",
-      "ERR_POOLS_RESPONSE_INVALID": "The firmware pools response did not contain a pools array.",
-      "ERR_POWER_TARGET_INVALID": "The power target must be a positive finite number.",
+      "ERR_AUTHENTICATION_RESPONSE_INVALID": "The authentication response did not contain valid token strings.",
+      "ERR_SYSTEM_RESPONSE_INVALID": "The firmware system response was malformed.",
+      "ERR_NETWORK_RESPONSE_INVALID": "The firmware network response was malformed.",
+      "ERR_MINING_RESPONSE_INVALID": "The firmware mining response was malformed.",
+      "ERR_POWER_TARGET_RESPONSE_INVALID": "The firmware power-target response or safety bounds were malformed or unsafe.",
+      "ERR_TELEMETRY_RESPONSE_INVALID": "The firmware telemetry response was malformed.",
+      "ERR_COOLING_RESPONSE_INVALID": "The firmware cooling response was malformed.",
+      "ERR_ERRORS_RESPONSE_INVALID": "The firmware errors response was malformed.",
+      "ERR_POOLS_RESPONSE_INVALID": "The firmware pools response was malformed or contained an unsafe URL.",
+      "ERR_POWER_TARGET_INVALID": "The power target must normalize to a positive safe integer.",
       "ERR_POWER_TARGET_OUT_OF_RANGE": "The power target is outside the bounds reported by the device.",
       "ERR_SET_POWER_MODE_INVALID": "The power mode must be normal or sleep.",
       "ERR_SET_LED_ENABLED_INVALID": "The LED value must be boolean.",
       "ERR_POOLS_INVALID": "Pool configuration must contain one to three entries.",
-      "ERR_POOL_ENTRY_INVALID": "Each pool needs a URL and worker name."
+      "ERR_POOL_ENTRY_INVALID": "Each pool needs a safe URL without userinfo, a worker name, and valid optional strings.",
+      "ERR_APPEND_ID_INVALID": "The appendId pool option must be boolean."
     }
   }
 }
