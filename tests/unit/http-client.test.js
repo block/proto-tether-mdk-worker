@@ -125,6 +125,42 @@ test('timeout and malformed JSON produce stable errors', async (t) => {
   await t.exception(malformedClient.request('/system'), /ERR_RESPONSE_INVALID_JSON/)
 })
 
+test('headers-then-stalled body uses request timeout', async (t) => {
+  const client = new ProtoHttpClient({
+    address: '192.0.2.10',
+    accessToken: 'access',
+    timeout: 5,
+    fetchImpl: async (_url, opts) => ({
+      status: 200,
+      ok: true,
+      text: async () => new Promise((_resolve, reject) => {
+        opts.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })))
+        setTimeout(() => reject(new Error('body did not abort')), 25)
+      })
+    })
+  })
+  await t.exception(client.request('/system'), /ERR_REQUEST_TIMEOUT/)
+})
+
+test('body read failures use stable redacted errors', async (t) => {
+  const client = new ProtoHttpClient({
+    address: '192.0.2.10',
+    accessToken: 'token-secret',
+    fetchImpl: async () => ({
+      status: 200,
+      ok: true,
+      text: async () => { throw new Error('stream failed with token-secret upstream detail') }
+    })
+  })
+  let bodyError
+  await t.exception(client.request('/system').catch((err) => {
+    bodyError = err
+    throw err
+  }), /ERR_DEVICE_CONNECTION/)
+  t.is(bodyError.message.includes('token-secret'), false)
+  t.is(bodyError.message.includes('upstream detail'), false)
+})
+
 test('authentication and HTTP failures use stable redacted errors', async (t) => {
   const rejected = new ProtoHttpClient({
     address: '192.0.2.10',
