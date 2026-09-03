@@ -5,8 +5,8 @@ const http = require('node:http')
 function createState (opts = {}) {
   return {
     password: opts.password || 'test-password',
-    tokenSeq: 0,
-    refreshSeq: 0,
+    tokenSeq: opts.tokenSeq || 0,
+    refreshSeq: opts.refreshSeq || 0,
     expireFirstToken: opts.expireFirstToken === true,
     firstTokenRejected: false,
     requests: [],
@@ -94,7 +94,7 @@ async function handle (req, res, state, controls) {
   const url = new URL(req.url, 'http://127.0.0.1')
   const pathname = url.pathname
   const body = await readBody(req)
-  state.requests.push({ method: req.method, path: pathname, url: req.url, body })
+  state.requests.push({ method: req.method, path: pathname, url: req.url, authorization: req.headers.authorization || null, body })
 
   if (controls.delayMs > 0) await delay(controls.delayMs)
 
