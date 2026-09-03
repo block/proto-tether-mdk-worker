@@ -1,36 +1,96 @@
-# proto-tether-mdk-worker README
+# Proto Tether MDK Worker
 
-Congrats, project leads! You got a new project to grow!
+## Overview
 
-This stub is meant to help you form a strong community around your work. It's yours to adapt, and may 
-diverge from this initial structure. Just keep the files seeded in this repo, and the rest is yours to evolve! 
+Proto Tether MDK Worker hosts Proto R2 Rig miners in Tether MDK through `WorkerRuntimeV2`. It maps the released public Proto Rig MDK HTTP API v1 to MDK telemetry and commands.
 
-## Introduction
+The worker authenticates with JWT bearer tokens. It reads telemetry, reports normalized MDK values, and sends operator commands that can affect physical hardware.
 
-Orient users to the project here. This is a good place to start with an assumption
-that the user knows very little - so start with the Big Picture and show how this
-project fits into it.
+## Requirements
 
-Then maybe a dive into what this project does.
+- Node.js 24 or newer.
+- Tether MDK with `WorkerRuntimeV2`.
+- Network access from the host to each Proto R2 Rig public API v1 endpoint.
+- A device password or token from secret management.
 
-Diagrams and other visuals are helpful here. Perhaps code snippets showing usage.
+Do not commit credentials, access tokens, refresh tokens, or pool passwords.
 
-Project leads should complete, alongside this `README`:
+## Host the worker
 
-* [CODEOWNERS](./CODEOWNERS) - set project lead(s)
-* [CONTRIBUTING.md](./CONTRIBUTING.md) - Fill out how to: install prereqs, build, test, run, access CI, chat, discuss, file issues
-* [Bug-report.md](.github/ISSUE_TEMPLATE/bug-report.md) - Fill out `Assignees` add codeowners @names
-* [config.yml](.github/ISSUE_TEMPLATE/config.yml) - remove "(/add your discord channel..)" and replace the url with your Discord channel if applicable
+Install dependencies from the repository directory:
 
-The other files in this template repo may be used as-is:
+```bash
+npm install
+```
 
-* [GOVERNANCE.md](./GOVERNANCE.md)
-* [LICENSE](./LICENSE)
+Host one device with `WorkerRuntimeV2`. Read the password from the environment. Set the address through deployment configuration or the environment.
 
-## Project Resources
+```js
+'use strict'
 
-| Resource                                   | Description                                                                    |
-| ------------------------------------------ | ------------------------------------------------------------------------------ |
-| [CODEOWNERS](./CODEOWNERS)                 | Outlines the project lead(s)                                                   |
-| [GOVERNANCE.md](./GOVERNANCE.md)           | Project governance                                                             |
-| [LICENSE](./LICENSE)                       | Apache License, Version 2.0                                                    |
+const path = require('node:path')
+const WorkerRuntimeV2 = require('@tetherto/mdk-worker/worker-runtime-v2')
+
+const repositoryDirectory = path.resolve(__dirname)
+const address = process.env.PROTO_RIG_ADDRESS
+const password = process.env.PROTO_RIG_PASSWORD
+
+if (!address) throw new Error('ERR_ADDRESS_REQUIRED')
+if (!password) throw new Error('ERR_PASSWORD_REQUIRED')
+
+const runtime = new WorkerRuntimeV2(repositoryDirectory, {
+  workerId: 'proto-worker',
+  devices: [
+    {
+      deviceId: 'proto-r2-1',
+      config: {
+        address,
+        port: Number(process.env.PROTO_RIG_PORT) || 80,
+        password
+      }
+    }
+  ]
+})
+
+runtime.start()
+```
+
+Keep `repositoryDirectory` pointed at this repository. The runtime loads `mdk-contract.json` and the handler files from that directory.
+
+## Test
+
+Run all checks:
+
+```bash
+npm test
+```
+
+Run the local mock for development:
+
+```bash
+PROTO_RIG_PASSWORD="$PROTO_RIG_PASSWORD" npm run mock
+```
+
+The mock binds to loopback and implements the public API v1 behavior used by this worker.
+
+## Read-only hardware check
+
+Use the live read-only script to verify authentication and telemetry without sending write commands:
+
+```bash
+PROTO_RIG_PASSWORD="$PROTO_RIG_PASSWORD" node scripts/test-live-readonly.js "$PROTO_RIG_ADDRESS" "${PROTO_RIG_PORT:-80}"
+```
+
+The script prints JSON with `deviceId`, `status`, `hashrateThs`, `powerW`, `temperatureC`, and `powerTargetW`. It exits with `ERR_ADDRESS_REQUIRED` when no address is passed. It exits with `ERR_PASSWORD_REQUIRED` when `PROTO_RIG_PASSWORD` is unset.
+
+## Safety
+
+Treat command calls as physical operations. Verify thermal state, power limits, and pool configuration before issuing commands.
+
+A timeout or disconnect during a write has an unknown physical outcome. Do not retry the write automatically. Read the device state first, then decide the next operator action.
+
+Do not store credentials or pool passwords in source control. Load them from secret management at runtime.
+
+## License
+
+This project is licensed under the Apache License, Version 2.0. See `LICENSE` and `NOTICE`.
