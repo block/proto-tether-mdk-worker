@@ -205,6 +205,17 @@ test('snapshot rejects malformed or overflowing present stale shares', async (t)
   }
 })
 
+test('unknown mining states fail closed', async (t) => {
+  const client = new ProtoRigClient({
+    id: 'R2-001',
+    api: apiFixture({ getMiningStatus: async () => ({ status: 'FutureFirmwareState' }) }),
+    cacheMs: 0
+  })
+
+  await t.exception(client.getStatus(), /ERR_MINING_RESPONSE_INVALID/)
+  await t.exception(client.getPowerMode(), /ERR_MINING_RESPONSE_INVALID/)
+})
+
 test('mining states and active firmware errors map to MDK status', async (t) => {
   const cases = [
     ['Mining', [], 'mining'],
@@ -306,6 +317,24 @@ test('setPowerTarget normalizes the exact transmitted integer before checking bo
   t.alike(await client.setPowerTarget(399.6), { success: true, target: { power_target_watts: 400 } })
   await t.exception(client.setPowerTarget(399.4), /ERR_POWER_TARGET_OUT_OF_RANGE: 400-6000/)
   t.alike(writes, [400])
+})
+
+test('setPowerTarget accepts exact hardware bounds and rejects one watt above', async (t) => {
+  const writes = []
+  const api = apiFixture({
+    getMiningTarget: async () => ({
+      power_target_watts: 3300,
+      power_target_min_watts: 400,
+      power_target_max_watts: 12000
+    }),
+    setPowerTarget: async watts => { writes.push(watts); return { power_target_watts: watts } }
+  })
+  const client = new ProtoRigClient({ id: 'R2-001', api, cacheMs: 0 })
+
+  t.alike(await client.setPowerTarget(400), { success: true, target: { power_target_watts: 400 } })
+  t.alike(await client.setPowerTarget(12000), { success: true, target: { power_target_watts: 12000 } })
+  await t.exception(client.setPowerTarget(12001), /ERR_POWER_TARGET_OUT_OF_RANGE: 400-12000/)
+  t.alike(writes, [400, 12000])
 })
 
 test('setPowerTarget rejects unusable requests before reading device bounds', async (t) => {

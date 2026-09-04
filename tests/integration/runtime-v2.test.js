@@ -236,6 +236,10 @@ test('health derives safe device state without exposing failures', async (t) => 
     t.alike(await health(), { status: 'OK' })
     t.alike(await health('proto-misconfigured'), { status: 'OFFLINE' })
 
+    statusByPath['/api/v1/mining'] = 204
+    t.alike(await health(), { status: 'OK' })
+    delete statusByPath['/api/v1/mining']
+
     firmware.state.errors = [{ source: 'fan', slot: 0, timestamp: 1764160757 }]
     t.alike(await health(), { status: 'DEGRADED' })
 

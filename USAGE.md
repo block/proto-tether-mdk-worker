@@ -44,7 +44,7 @@ The worker exposes these telemetry values from `mdk-contract.json`:
 | `snap` | `` | object | Structured miner statistics and non-secret configuration metadata. |
 | `health` | `` | object | Credential-safe device health: `{ status: 'OK' }`, `{ status: 'DEGRADED' }`, or `{ status: 'OFFLINE' }`. |
 
-`status` uses MDK status values. Mining maps to `mining`. Stopped and Curtailed map to `sleeping`. PoweringOff maps to `not_mining`. Active device errors map to `error`. Other non-mining startup states map to `not_mining`.
+`status` uses MDK status values. Mining maps to `mining`. Stopped and Curtailed map to `sleeping`. PoweringOff maps to `not_mining`. Active device errors map to `error`. Other non-mining startup states map to `not_mining`. A documented `204 No mining statistics` response is handled as the `Uninitialized` startup state; a power-target read in that state reports `ERR_MINING_STATISTICS_UNAVAILABLE`.
 
 `power_mode` uses MDK power mode values. Stopped, Curtailed, and PoweringOff map to `sleep`. Other states map to `normal`.
 
@@ -79,7 +79,7 @@ Preserve the previous pool configuration before changing mining destinations. Ve
 
 ## Failure semantics
 
-The HTTP client authenticates initially with a configured access token or by logging in with the device password. A refresh token is renewal material, not a standalone initial credential. Any authenticated request, including a write, may replay once only after an explicit HTTP 401 and successful token renewal. This is the sole retry path.
+The HTTP client authenticates initially with a configured access token or by logging in with the device password. A refresh token is renewal material, not a standalone initial credential. Any authenticated request, including a write, may replay once only after an explicit HTTP 401 and successful token renewal. This is the sole retry path. Login and refresh `401` or `403` responses are reported as authentication failures; server failures retain their HTTP status and do not trigger a password fallback.
 
 The worker does not retry non-401 HTTP responses, connection errors, request timeouts, malformed JSON, malformed successful responses, or any other ambiguous outcome. A timeout or disconnect during a write has an unknown physical outcome and must not trigger an automatic retry. Read current device state before sending another write.
 

@@ -59,6 +59,16 @@ test('request sends JSON and parses JSON without leaking credentials', async (t)
   t.is(JSON.stringify(await client.request('/telemetry')).includes('token-secret'), false)
 })
 
+test('request can preserve successful HTTP status for endpoint-specific handling', async (t) => {
+  const client = new ProtoHttpClient({
+    address: '192.0.2.10',
+    accessToken: 'access',
+    fetchImpl: async () => response(204)
+  })
+
+  t.alike(await client.request('/mining', { includeStatus: true }), { status: 204, data: null })
+})
+
 test('concurrent requests share one login', async (t) => {
   let logins = 0
   const fetchImpl = async (url) => {
@@ -278,6 +288,45 @@ test('authentication success payloads require non-empty string tokens', async (t
     })
     await t.exception(client.request('/system'), /ERR_AUTHENTICATION_RESPONSE_INVALID/)
   }
+})
+
+test('login and refresh preserve non-authentication HTTP failures', async (t) => {
+  const forbidden = new ProtoHttpClient({
+    address: '192.0.2.10',
+    password: 'password-secret',
+    fetchImpl: async () => response(403, { error: 'rejected' })
+  })
+  await t.exception(forbidden.request('/system'), /ERR_AUTHENTICATION_FAILED/)
+
+  const loginUnavailable = new ProtoHttpClient({
+    address: '192.0.2.10',
+    password: 'password-secret',
+    fetchImpl: async () => response(500, { error: 'upstream detail' })
+  })
+  await t.exception(loginUnavailable.request('/system'), /ERR_HTTP_RESPONSE: 500/)
+
+  let refreshes = 0
+  let logins = 0
+  const refreshUnavailable = new ProtoHttpClient({
+    address: '192.0.2.10',
+    accessToken: 'access-1',
+    refreshToken: 'refresh-1',
+    password: 'password-secret',
+    fetchImpl: async (url) => {
+      if (url.endsWith('/auth/refresh')) {
+        refreshes++
+        return response(503, { error: 'upstream detail' })
+      }
+      if (url.endsWith('/auth/login')) {
+        logins++
+        return response(200, { access_token: 'access-2' })
+      }
+      return response(401, { error: 'expired' })
+    }
+  })
+  await t.exception(refreshUnavailable.request('/system'), /ERR_HTTP_RESPONSE: 503/)
+  t.is(refreshes, 1)
+  t.is(logins, 0)
 })
 
 test('authentication and HTTP failures use stable redacted errors', async (t) => {

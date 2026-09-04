@@ -8,14 +8,16 @@ function fixture () {
   const http = {
     request: async (path, opts = {}) => {
       calls.push([path, opts])
-      if (path === '/mining') return { 'mining-status': { status: 'Mining' } }
-      if (path === '/pools') return { pools: [{ url: 'stratum+tcp://pool:3333' }] }
-      if (path === '/errors') return []
-      if (path === '/system') return { 'system-info': { model: 'R2' } }
-      if (path === '/network') return { 'network-info': { dhcp: true } }
-      if (path === '/mining/target') return { power_target_watts: 3300 }
-      if (path === '/cooling') return { 'cooling-status': { fans: [] } }
-      return { ok: true }
+      let data
+      if (path === '/mining') data = { 'mining-status': { status: 'Mining' } }
+      else if (path === '/pools') data = { pools: [{ url: 'stratum+tcp://pool:3333' }] }
+      else if (path === '/errors') data = []
+      else if (path === '/system') data = { 'system-info': { model: 'R2' } }
+      else if (path === '/network') data = { 'network-info': { dhcp: true } }
+      else if (path === '/mining/target') data = { power_target_watts: 3300 }
+      else if (path === '/cooling') data = { 'cooling-status': { fans: [] } }
+      else data = { ok: true }
+      return opts.includeStatus ? { status: 200, data } : data
     }
   }
   return { api: new ApiV1(http), calls }
@@ -40,10 +42,21 @@ test('read methods map direct public API v1 paths', async (t) => {
   t.alike(calls, [
     ['/system', {}],
     ['/network', {}],
-    ['/mining/target', {}],
+    ['/mining/target', { includeStatus: true }],
     ['/cooling', {}],
     ['/system/reboot', { method: 'POST' }]
   ])
+})
+
+test('204 mining reads preserve the documented startup state', async (t) => {
+  const api = new ApiV1({
+    request: async (_path, opts = {}) => opts.includeStatus
+      ? { status: 204, data: null }
+      : null
+  })
+
+  t.alike(await api.getMiningStatus(), { status: 'Uninitialized' })
+  await t.exception(api.getMiningTarget(), /ERR_MINING_STATISTICS_UNAVAILABLE/)
 })
 
 test('read methods reject malformed successful endpoint envelopes', async (t) => {
@@ -61,9 +74,9 @@ test('read methods reject malformed successful endpoint envelopes', async (t) =>
   for (const [method, expectedPath, payload, error] of cases) {
     let seenPath
     const api = new ApiV1({
-      request: async path => {
+      request: async (path, opts = {}) => {
         seenPath = path
-        return payload
+        return opts.includeStatus ? { status: 200, data: payload } : payload
       }
     })
     await t.exception(api[method](), error, `${method} rejects malformed success`)
