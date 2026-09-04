@@ -42,7 +42,7 @@ The worker exposes these telemetry values from `mdk-contract.json`:
 | `power_target` | `W` | number | Configured mining power target in watts. |
 | `fan_speed` | `RPM` | number | Average speed of all cooling fans. |
 | `snap` | `` | object | Structured miner statistics and non-secret configuration metadata. |
-| `health` | `` | object | Worker-owned safe health status, exactly `{ status: 'OK' }`. |
+| `health` | `` | object | Credential-safe device health: `{ status: 'OK' }`, `{ status: 'DEGRADED' }`, or `{ status: 'OFFLINE' }`. |
 
 `status` uses MDK status values. Mining maps to `mining`. Stopped and Curtailed map to `sleeping`. PoweringOff maps to `not_mining`. Active device errors map to `error`. Other non-mining startup states map to `not_mining`.
 
@@ -50,7 +50,7 @@ The worker exposes these telemetry values from `mdk-contract.json`:
 
 `snap` includes miner statistics, non-secret network metadata, credential-free pool URLs and usernames, power mode, power target, firmware version, product name, model, and serial number. It does not include passwords or bearer tokens. A pool URL returned by firmware with userinfo is rejected with `ERR_POOLS_RESPONSE_INVALID` rather than published.
 
-`health` is explicitly declared and implemented by this worker. It never includes device options, environment values, runtime configuration, credentials, URLs, or tokens. This declaration overrides the unsafe fallback present in the minimum supported `WorkerRuntimeV2`, including during aggregate `metrics` collection.
+`health` is explicitly declared and implemented by this worker. It reports `DEGRADED` for active firmware errors and `OFFLINE` when the device status cannot be read, without including failure details. It never includes device options, environment values, runtime configuration, credentials, URLs, or tokens. This declaration overrides the unsafe fallback present in the minimum supported `WorkerRuntimeV2`, including during aggregate `metrics` collection.
 
 ## Commands
 

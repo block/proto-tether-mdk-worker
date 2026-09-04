@@ -20,7 +20,7 @@
       { "name": "power_target", "unit": "W", "type": "number", "handler": "src/telemetry/power-target.js", "description": "Configured mining power target in watts." },
       { "name": "fan_speed", "unit": "RPM", "type": "number", "handler": "src/telemetry/fan-speed.js", "description": "Average speed of all cooling fans." },
       { "name": "snap", "unit": "", "type": "object", "handler": "src/telemetry/snap.js", "description": "Structured miner statistics and non-secret configuration metadata." },
-      { "name": "health", "unit": "", "type": "object", "handler": "src/telemetry/health.js", "description": "Worker-owned health status containing no device configuration or credentials." }
+      { "name": "health", "unit": "", "type": "object", "handler": "src/telemetry/health.js", "description": "Credential-safe device health: OK normally, DEGRADED for active firmware errors, or OFFLINE when status cannot be read." }
     ],
     "commands": [
       {

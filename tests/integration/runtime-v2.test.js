@@ -201,3 +201,50 @@ test('WorkerRuntimeV2 keeps device state isolated and publishes clean envelopes'
     await cleanup.cleanupAll()
   }
 })
+
+test('health derives safe device state without exposing failures', async (t) => {
+  const cleanup = createCleanupStack(t)
+  const statusByPath = {}
+  const firmware = createServer({ password: 'health-device-password', statusByPath })
+  cleanup.add(() => firmware.close())
+  const address = await firmware.ready
+
+  const runtime = new WorkerRuntimeV2(WORKER_DIR, {
+    workerId: 'proto-test',
+    devices: [
+      {
+        deviceId: 'proto-health',
+        config: { address: '127.0.0.1', port: address.port, password: 'health-device-password', cacheMs: 0 }
+      },
+      {
+        deviceId: 'proto-misconfigured',
+        config: { address: '127.0.0.1', port: address.port, cacheMs: 0 }
+      }
+    ]
+  })
+  cleanup.add(() => runtime.stop())
+
+  try {
+    await runtime.start()
+    const health = async (deviceId = 'proto-health') => {
+      const req = request(ACTIONS.TELEMETRY_PULL, deviceId, { query: { type: 'health' } })
+      const response = await runtime.handleRequest(req)
+      assertResponseEnvelope(t, response, req, ACTIONS.TELEMETRY_RESPONSE, deviceId)
+      return response.payload.value
+    }
+
+    t.alike(await health(), { status: 'OK' })
+    t.alike(await health('proto-misconfigured'), { status: 'OFFLINE' })
+
+    firmware.state.errors = [{ source: 'fan', slot: 0, timestamp: 1764160757 }]
+    t.alike(await health(), { status: 'DEGRADED' })
+
+    statusByPath['/api/v1/errors'] = 503
+    const offline = await health()
+    t.alike(offline, { status: 'OFFLINE' })
+    t.is(JSON.stringify(offline).includes('503'), false)
+    t.is(JSON.stringify(offline).includes('health-device-password'), false)
+  } finally {
+    await cleanup.cleanupAll()
+  }
+})

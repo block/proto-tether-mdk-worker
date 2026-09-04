@@ -345,6 +345,7 @@ test('setPowerTarget rejects unsafe device bounds before writing', async (t) => 
     { power_target_min_watts: 400, power_target_max_watts: Infinity },
     { power_target_min_watts: 6000, power_target_max_watts: 400 },
     { power_target_min_watts: 0, power_target_max_watts: 6000 },
+    { power_target_min_watts: 400, power_target_max_watts: 12001 },
     { power_target_min_watts: 400, power_target_max_watts: Number.MAX_SAFE_INTEGER + 1 }
   ]
 
