@@ -24,6 +24,8 @@ test('contract loads every V2 handler and strips private paths', (t) => {
   ]) t.is(item.handler, undefined)
 
   for (const error of [
+    'ERR_COMMAND_COOLDOWN',
+    'ERR_COMMAND_IN_PROGRESS',
     'ERR_DEVICE_ADDRESS_INVALID',
     'ERR_DEVICE_CREDENTIALS_INVALID',
     'ERR_CACHE_DURATION_INVALID',

@@ -4,6 +4,8 @@
 
 Configure each device in `WorkerRuntimeV2` with a `deviceId` and a `config` object.
 
+The bundled host in `host/index.js` exposes `startProtoWorker({ workerId, devices, storeDir, kernelTopic, ...runtimeOptions })`, returning `{ runtime, stop }`. `storeDir` is required and holds the runtime's persistent identity seeds. `stop()` is idempotent. Set `MDK_REPO` to a checkout, or supply the installed `@tetherto/mdk` monorepo. See [Host the worker](README.md#host-the-worker) for installation, environment settings, and Kernel registration. The worker runtime package is not yet published separately.
+
 Device options:
 
 | Option | Required | Description |
@@ -58,7 +60,7 @@ Commands call public API v1 write endpoints. They return serializable MDK comman
 
 | Command | Parameters | Effect |
 | --- | --- | --- |
-| `reboot` | none | Restarts the R2 Rig controller. Do not call more than once per 5 minutes. |
+| `reboot` | none | Restarts the R2 Rig controller. Enforces a five-minute cooldown per device after every attempt, including ambiguous failures. Rejects an in-flight reboot with `ERR_COMMAND_IN_PROGRESS` and an attempt during cooldown with `ERR_COMMAND_COOLDOWN`. |
 | `setPowerMode` | `mode`: `normal` or `sleep` | Starts mining for `normal` or stops mining for `sleep`. |
 | `setPowerTarget` | `watts`: number from `1` through `12000` | The published R2 contract rejects values above its model-wide ceiling. The handler rounds to the exact transmitted integer, then checks finite positive safe-integer device bounds before writing. Missing, malformed, unsafe, or inverted bounds fail closed. |
 | `setLED` | `enabled`: boolean | Turns the control-board locate LED on or off for physical identification. |
@@ -76,6 +78,8 @@ Each pool entry uses:
 `appendId` must be boolean. `worker_password` and `pool`, when supplied, must be strings. All pool inputs are validated before network access. Pool passwords appear only in outbound write bodies, never command results, logs, telemetry, or snapshots.
 
 Preserve the previous pool configuration before changing mining destinations. Verify cooling and device limits before increasing power.
+
+The reboot cooldown is process-local and resets when a new device instance is created after host restart. Preserve operator awareness of recent hardware operations across restarts; the runtime's identity seed storage does not persist the cooldown.
 
 ## Failure semantics
 

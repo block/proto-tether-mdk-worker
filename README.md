@@ -9,52 +9,85 @@ The worker authenticates with JWT bearer tokens. It reads telemetry, reports nor
 ## Requirements
 
 - Node.js 24 or newer.
+- npm 11 for the MDK workspace installation.
 - Tether MDK with `WorkerRuntimeV2`.
 - Network access from the host to each Proto R2 Rig public API v1 endpoint.
 - A device password or token from secret management.
-- The host application must supply `@tetherto/mdk-worker`; this worker intentionally does not bundle the runtime.
+- A host-supplied MDK checkout or installed `@tetherto/mdk` monorepo. The standalone `@tetherto/mdk-worker` package is not yet published; this worker does not bundle the runtime.
 
 Do not commit credentials, access tokens, refresh tokens, or pool passwords. Device addresses are host-only values, not URLs, and cannot contain userinfo, a port, path, query, or fragment.
 
 ## Host the worker
 
-Install dependencies from the repository directory:
+Install the worker and a pinned MDK checkout from the repository directory:
 
 ```bash
-npm install
+npm ci --ignore-scripts
+git clone --branch v0.10.0 --depth 1 https://github.com/tetherto/mdk ../mdk
+npm run setup:mdk -- ../mdk
 ```
 
-Host one device with `WorkerRuntimeV2`. Read the password from the environment. Set the address through deployment configuration or the environment.
+The setup script supports both the minimum MDK revision's per-package installer and the root workspace introduced in MDK v0.9. For the workspace layout it installs only `@tetherto/mdk-worker` and its dependencies. To host a Kernel as well, run `npm ci` in the MDK repository root.
+
+Start the bundled single-device host. Supply the address and password through your environment or secret management:
+
+```bash
+MDK_REPO=../mdk npm run host
+```
+
+The host requires `PROTO_RIG_ADDRESS` and `PROTO_RIG_PASSWORD`. Optional environment settings:
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `PROTO_RIG_PORT` | `80` | Rig API port. |
+| `PROTO_RIG_PROTOCOL` | `http` | `http` or `https`; see [Transport security](#transport-security). |
+| `PROTO_WORKER_ID` | `proto-worker` | Worker identity reported to Kernel. |
+| `PROTO_DEVICE_ID` | `proto-r2-1` | Device identity used for command and telemetry routing. |
+| `PROTO_STORE_DIR` | `store/proto-worker` in this repository | Persistent DHT/RPC seed directory. Use a separate directory per worker host. |
+| `PROTO_KERNEL_TOPIC` | unset | Hex discovery topic matching your Kernel, when using DHT discovery. |
+
+The host prints its worker ID and RPC public key, and stops the runtime on `SIGINT` or `SIGTERM`. Startup confirms the host is listening; it does not authenticate with the rig or establish that the rig is healthy. Use the read-only hardware check below to verify the device. No hardware commands run at startup.
+
+For multiple devices or a host that shares a process with Kernel, use `host/index.js`:
 
 ```js
 'use strict'
 
 const path = require('node:path')
-const { WorkerRuntimeV2 } = require('@tetherto/mdk-worker')
+const { startProtoWorker } = require('./host')
 
 async function main () {
-  const repositoryDirectory = path.resolve(__dirname)
   const address = process.env.PROTO_RIG_ADDRESS
   const password = process.env.PROTO_RIG_PASSWORD
 
   if (!address) throw new Error('ERR_ADDRESS_REQUIRED')
   if (!password) throw new Error('ERR_PASSWORD_REQUIRED')
 
-  const runtime = new WorkerRuntimeV2(repositoryDirectory, {
+  const worker = await startProtoWorker({
     workerId: 'proto-worker',
+    storeDir: path.resolve(__dirname, 'store/proto-worker'),
+    kernelTopic: process.env.PROTO_KERNEL_TOPIC || null,
     devices: [
       {
         deviceId: 'proto-r2-1',
         config: {
           address,
-          port: Number(process.env.PROTO_RIG_PORT) || 80,
+          port: process.env.PROTO_RIG_PORT === undefined ? 80 : Number(process.env.PROTO_RIG_PORT),
           password
         }
       }
     ]
   })
 
-  await runtime.start()
+  const stop = () => worker.stop().catch(() => {
+    console.error('ERR_WORKER_SHUTDOWN_FAILED')
+    process.exitCode = 1
+  })
+  process.once('SIGINT', stop)
+  process.once('SIGTERM', stop)
+
+  // If Kernel lives in this process, register directly:
+  // await kernel.registerWorker(worker.runtime.getPublicKey())
 }
 
 main().catch(err => {
@@ -63,7 +96,9 @@ main().catch(err => {
 })
 ```
 
-Keep `repositoryDirectory` pointed at this repository. The host-supplied runtime loads `mdk-contract.json` and the handler files from that directory.
+Run this example with `MDK_REPO` pointing to the checkout. Alternatively, install the monorepo as `@tetherto/mdk`; the host resolves `@tetherto/mdk/backend/core/mdk-worker` when `MDK_REPO` is unset. Follow MDK's [Test a Worker guide](https://docs.mdk.tether.io/guides/workers/test-a-worker) for that installation and Kernel bootstrap.
+
+Register the runtime's public key with an existing Kernel using `await kernel.registerWorker(worker.runtime.getPublicKey())`, or configure the same discovery topic on both processes. Keep `storeDir` on persistent storage to preserve that public key across restarts. A new seed directory creates a new identity. The host helper always loads this repository's contract directory and requires a non-empty `storeDir`.
 
 ## Test
 
@@ -74,7 +109,7 @@ it alongside this one:
 
 ```bash
 git clone https://github.com/tetherto/mdk ../mdk
-(cd ../mdk/backend/core && ./install-packages.sh)
+npm run setup:mdk -- ../mdk
 ```
 
 Then run all checks — lint, unit tests, and integration tests — pointing
@@ -86,8 +121,7 @@ MDK_REPO=../mdk npm test
 
 `MDK_REPO` defaults to `/tmp/mdk-latest` when unset. Individual suites are
 available as `npm run lint`, `npm run test:unit`, and `npm run test:integration`.
-CI runs the same commands against both the minimum supported MDK commit and
-upstream `main`.
+CI tests the minimum supported MDK commit `633ee07905a6af1d9e0c44b770df09eb0ac432b4`, pinned v0.10.0 (`7f5cae88f67cd0ebedaa325778f9209135de1b8f`), and upstream `main`. It runs on pull requests, pushes to `main`, manual dispatch, and weekly on Mondays at 06:00 UTC. The integration suite exercises real HRPC over a local DHT test network, persistent identity across restart, and host shutdown, in addition to in-process dispatch and mock HTTP behavior.
 
 Run the local mock for development:
 
@@ -112,6 +146,8 @@ The script prints JSON with `deviceId`, `status`, `hashrateThs`, `powerW`, `temp
 ## Safety
 
 Treat command calls as physical operations. Verify thermal state, power limits, and pool configuration before issuing commands.
+
+Reboot attempts have an enforced five-minute per-device cooldown. Failed attempts, including timeouts with unknown outcomes, consume the cooldown, and concurrent reboots are rejected. This guard lives in the device instance and resets when the host restarts; it is not a durable record of hardware operations.
 
 Any authenticated request, including a write, may replay once only after an explicit HTTP 401 and successful credential renewal. A timeout, disconnect, malformed response, or other ambiguous write outcome is never retried. Affected read caches are invalidated before and after an attempted write; read the device state before deciding the next operator action.
 

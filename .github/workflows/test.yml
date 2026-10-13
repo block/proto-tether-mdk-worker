@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'
 
 permissions:
   contents: read
@@ -16,6 +19,8 @@ jobs:
         include:
           - mdk-ref: 633ee07905a6af1d9e0c44b770df09eb0ac432b4
             compatibility: minimum
+          - mdk-ref: 7f5cae88f67cd0ebedaa325778f9209135de1b8f
+            compatibility: v0.10.0
           - mdk-ref: main
             compatibility: upstream
     runs-on: ubuntu-latest
@@ -115,8 +120,8 @@ jobs:
           NODE
 
       - name: Install MDK core dependencies
-        working-directory: mdk/backend/core
-        run: ./install-packages.sh
+        working-directory: proto-tether-mdk-worker
+        run: bash scripts/install-mdk.sh ../mdk
 
       - name: Install Worker dependencies
         working-directory: proto-tether-mdk-worker
