@@ -35,7 +35,7 @@ Start the bundled single-device host. Supply the address, password, and trusted 
 MDK_REPO=../mdk npm run host
 ```
 
-The host requires `PROTO_RIG_ADDRESS`, `PROTO_RIG_PASSWORD`, and `PROTO_TRUSTED_KERNEL_KEYS`. The last setting is a comma-separated list of 64-character hex public keys. The host rejects missing or malformed keys before opening runtime resources and rejects connections from every other peer. Authenticate the keys through your deployment configuration.
+The host requires `PROTO_RIG_ADDRESS`, `PROTO_RIG_PASSWORD`, and `PROTO_TRUSTED_KERNEL_KEYS`. The last setting is a comma-separated list of 64-character hex public keys. The host rejects missing or malformed keys before opening runtime resources and rejects RPC connections from every other peer. When `PROTO_KERNEL_TOPIC` is set, the discovery swarm shares the worker's RPC public key with any peer on that topic; discovery does not grant RPC access. Authenticate the keys through your deployment configuration.
 
 Use the Kernel's **outbound DHT transport key**, which differs from the RPC server key returned by `kernel.getPublicKey()`. With the supported MDK Kernel started, obtain it programmatically:
 
@@ -53,6 +53,9 @@ Set `PROTO_TRUSTED_KERNEL_KEYS` to that value on the worker host. Keep the Kerne
 | `PROTO_DEVICE_ID` | `proto-r2-1` | Device identity used for command and telemetry routing. |
 | `PROTO_STORE_DIR` | `store/proto-worker` in this repository | Persistent DHT/RPC seed directory. Use a separate directory per worker host. |
 | `PROTO_KERNEL_TOPIC` | unset | Hex discovery topic matching your Kernel, when using DHT discovery. |
+| `PROTO_DHT_BOOTSTRAP` | public HyperDHT bootstrap | Comma-separated `host:port` bootstrap endpoints for a private DHT or local test network. |
+
+The host exclusively locks its seed directory with `.proto-worker.lock` before opening devices or runtime transports. A second host using that directory fails with `ERR_WORKER_STORE_LOCKED`. Clean shutdown releases the lock. After a crash, confirm that no host still uses the directory before removing the leftover lock file and restarting; the host does not automatically steal stale locks.
 
 The host prints its worker ID and RPC public key, and stops the runtime on `SIGINT` or `SIGTERM`. Startup confirms the host is listening; it does not authenticate with the rig or establish that the rig is healthy. Use the read-only hardware check below to verify the device. No hardware commands run at startup.
 

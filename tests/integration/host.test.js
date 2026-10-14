@@ -3,6 +3,7 @@
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
+const { randomBytes } = require('node:crypto')
 const { createRequire } = require('node:module')
 const { spawn } = require('node:child_process')
 const test = require('brittle')
@@ -14,14 +15,25 @@ const { startProtoWorker } = require('../../host')
 const requireFromRuntime = createRequire(path.join(MDK_REPO, 'backend/core/mdk-worker/package.json'))
 const createTestnet = requireFromRuntime('hyperdht/testnet')
 const HyperswarmRPC = requireFromRuntime('@hyperswarm/rpc')
+const Hyperswarm = requireFromRuntime('hyperswarm')
 const DHT = requireFromRuntime('hyperdht')
 const { build, serialize, deserialize } = require(path.join(MDK_REPO, 'backend/core/kernel/lib/protocol/envelope'))
 const WORKER_DIR = path.resolve(__dirname, '../..')
+const RPC_TIMEOUT = 10000
 
 function temporaryStore (t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-host-'))
   t.teardown(() => fs.rmSync(dir, { recursive: true, force: true }), { order: 100 })
   return dir
+}
+
+async function assertTransportRejected (t, rpc, key, request) {
+  const client = rpc.connect(key)
+  let transportError
+  client.stream.on('error', err => { transportError = err })
+  await t.exception(client.request('mdk', request, { timeout: RPC_TIMEOUT }), { code: 'CHANNEL_CLOSED' }, 'untrusted RPC closes instead of reaching its request timeout')
+  t.is(transportError?.code, 'PEER_CONNECTION_FAILED', 'the DHT rejects the untrusted transport connection')
+  client.destroy()
 }
 
 test('host serves real HRPC, isolates devices, and retains its identity after restart', { timeout: 60000 }, async (t) => {
@@ -53,14 +65,25 @@ test('host serves real HRPC, isolates devices, and retains its identity after re
   const worker = await startProtoWorker(options)
   t.teardown(() => worker.stop())
   const originalKey = worker.runtime.getPublicKey()
-  const intruder = new HyperswarmRPC({ bootstrap: testnet.bootstrap })
+  const intruderDht = new DHT({ bootstrap: testnet.bootstrap })
+  t.teardown(() => intruderDht.destroy())
+  const intruder = new HyperswarmRPC({ dht: intruderDht })
   t.teardown(() => intruder.destroy())
+  const controlDht = new DHT({ bootstrap: testnet.bootstrap })
+  t.teardown(() => controlDht.destroy())
+  const controlRpc = new HyperswarmRPC({ dht: controlDht })
+  t.teardown(() => controlRpc.destroy())
+  const control = controlRpc.createServer()
+  control.respond('mdk', req => req)
+  await control.listen()
   for (const [action, deviceId, payload] of [
     ['identity.request', null, {}],
     ['command.request', 'proto-1', { commandId: 'spoofed', command: 'setLED', params: { enabled: true } }]
   ]) {
     const spoofed = build({ action, type: 'request', sender: 'proto-host-caller', target: options.workerId, deviceId, payload })
-    await t.exception(intruder.request(originalKey, 'mdk', serialize(spoofed), { timeout: 1500 }), 'untrusted transport cannot impersonate an allowed sender')
+    const request = serialize(spoofed)
+    t.alike(await intruder.request(control.publicKey, 'mdk', request, { timeout: RPC_TIMEOUT }), request, 'the same intruder reaches an unfiltered server within the same timeout')
+    await assertTransportRejected(t, intruder, originalKey, request)
   }
   t.is(first.state.led, false, 'an unauthorized command never reaches the rig')
   t.is(callerDht.defaultKeyPair.publicKey.equals(rpc.defaultKeyPair.publicKey), false, 'allowlist uses the client transport identity')
@@ -113,7 +136,10 @@ test('host serves real HRPC, isolates devices, and retains its identity after re
   t.is(second.state.writeAttempts['/api/v1/system/reboot'], 1)
 
   await rpc.destroy()
+  await intruder.destroy()
   await worker.stop()
+  t.is(first.state.led, false, 'after client destruction and host shutdown no unauthorized LED write arrived')
+  t.is(first.state.writeAttempts['/api/v1/system/locate'], undefined, 'the unauthorized LED command never produced a write attempt')
   await worker.stop()
   t.is(worker.runtime.getPublicKey(), null)
   const restarted = await startProtoWorker({ ...options, trustedKernelKeys: [callerDht.defaultKeyPair.publicKey] })
@@ -146,8 +172,110 @@ test('host requires valid trusted transport keys before opening runtime resource
   }
 })
 
+test('topic discovery publishes the RPC key while RPC remains restricted to trusted transports', { timeout: 60000 }, async (t) => {
+  const testnet = await createTestnet(3, t.teardown)
+  const callerDht = new DHT({ bootstrap: testnet.bootstrap })
+  const intruderDht = new DHT({ bootstrap: testnet.bootstrap })
+  t.teardown(() => callerDht.destroy())
+  t.teardown(() => intruderDht.destroy())
+  const topic = randomBytes(32)
+  const worker = await startProtoWorker({
+    workerId: 'discovery-host',
+    storeDir: temporaryStore(t),
+    bootstrap: testnet.bootstrap,
+    trustedKernelKeys: [callerDht.defaultKeyPair.publicKey],
+    kernelTopic: topic,
+    devices: [],
+    allowEmptyDevices: true
+  })
+  t.teardown(() => worker.stop())
+  const discover = async (dht) => {
+    const swarm = new Hyperswarm({ dht })
+    t.teardown(() => swarm.destroy())
+    let timer
+    const key = new Promise((resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('ERR_DISCOVERY_TIMED_OUT')), 10000)
+      swarm.once('connection', stream => {
+        let received = Buffer.alloc(0)
+        stream.on('error', reject)
+        stream.on('data', chunk => {
+          received = Buffer.concat([received, chunk])
+          if (received.length >= 32) resolve(received)
+        })
+      })
+    })
+    swarm.join(topic, { server: false, client: true })
+    return key.finally(() => clearTimeout(timer))
+  }
+  const [trustedKey, untrustedKey] = await Promise.all([discover(callerDht), discover(intruderDht)])
+  t.alike(trustedKey, worker.runtime.getPublicKey(), 'client-only trusted discovery reads the RPC identity')
+  t.alike(untrustedKey, trustedKey, 'topic discovery shares the key with an untrusted peer too')
+  const rpc = new HyperswarmRPC({ dht: callerDht })
+  const intruder = new HyperswarmRPC({ dht: intruderDht })
+  t.teardown(() => rpc.destroy())
+  t.teardown(() => intruder.destroy())
+  const request = serialize(build({ action: 'identity.request', type: 'request', sender: 'discovery-caller', target: 'discovery-host', payload: {} }))
+  const identity = deserialize(await rpc.request(trustedKey, 'mdk', request, { timeout: 1500 }))
+  t.is(identity.action, 'identity.response')
+  t.is(identity.payload.workerId, 'discovery-host')
+  await assertTransportRejected(t, intruder, untrustedKey, request)
+})
+
+test('persistent store lock rejects concurrent hosts and releases after stop', { timeout: 30000 }, async (t) => {
+  const testnet = await createTestnet(3, t.teardown)
+  const options = { workerId: 'lock-host', devices: [], allowEmptyDevices: true, storeDir: temporaryStore(t), bootstrap: testnet.bootstrap, trustedKernelKeys: ['ab'.repeat(32)] }
+  const worker = await startProtoWorker(options)
+  t.teardown(() => worker.stop())
+  const lockPath = path.join(options.storeDir, '.proto-worker.lock')
+  t.is(fs.statSync(lockPath).mode & 0o777, 0o600, 'the lock file is private')
+  const originalSeeds = ['seedDht', 'seedRpc'].map(name => fs.readFileSync(path.join(options.storeDir, name)))
+  await t.exception(startProtoWorker({ ...options, workerId: 'other-host' }), /ERR_WORKER_STORE_LOCKED/)
+  t.alike(['seedDht', 'seedRpc'].map(name => fs.readFileSync(path.join(options.storeDir, name))), originalSeeds, 'a refused host does not overwrite seeds')
+  const child = spawn(process.execPath, [path.join(WORKER_DIR, 'host/run.js')], {
+    env: { ...process.env, MDK_REPO, PROTO_RIG_ADDRESS: '127.0.0.1', PROTO_RIG_PASSWORD: 'lock-secret', PROTO_TRUSTED_KERNEL_KEYS: 'ab'.repeat(32), PROTO_STORE_DIR: options.storeDir, PROTO_DHT_BOOTSTRAP: testnet.bootstrap.map(({ host, port }) => `${host}:${port}`).join(',') },
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+  t.teardown(() => child.kill('SIGKILL'), { force: true })
+  let stderr = ''
+  let stdout = ''
+  child.stderr.on('data', chunk => { stderr += chunk })
+  child.stdout.on('data', chunk => { stdout += chunk })
+  t.is(await new Promise((resolve, reject) => {
+    child.once('error', reject)
+    child.once('close', resolve)
+  }), 1, 'a second process also refuses the occupied store')
+  t.is(stderr, 'ERR_WORKER_STORE_LOCKED\n')
+  t.is(stdout, '', 'the refused process never announces readiness')
+  await Promise.all([worker.stop(), worker.stop()])
+  t.is(fs.existsSync(lockPath), false)
+  const restarted = await startProtoWorker(options)
+  t.teardown(() => restarted.stop())
+  t.alike(['seedDht', 'seedRpc'].map(name => fs.readFileSync(path.join(options.storeDir, name))), originalSeeds)
+})
+
+test('startup failure releases the store lock; an existing crash lock fails closed', { timeout: 30000 }, async (t) => {
+  const testnet = await createTestnet(3, t.teardown)
+  const options = { workerId: 'failed-host', devices: [], allowEmptyDevices: true, storeDir: temporaryStore(t), bootstrap: testnet.bootstrap, trustedKernelKeys: ['ab'.repeat(32)] }
+  const lockPath = path.join(options.storeDir, '.proto-worker.lock')
+  const seedPath = path.join(options.storeDir, 'seedDht')
+  fs.mkdirSync(seedPath)
+  await t.exception(startProtoWorker(options), { code: 'EISDIR' }, 'seed read failure triggers startup cleanup')
+  t.is(fs.existsSync(lockPath), false, 'failed startup releases its acquired lock')
+  fs.rmdirSync(seedPath)
+  fs.writeFileSync(lockPath, 'stale owner', { mode: 0o600 })
+  await t.exception(startProtoWorker(options), /ERR_WORKER_STORE_LOCKED/, 'an existing lock is never automatically stolen')
+  t.is(fs.readFileSync(lockPath, 'utf8'), 'stale owner')
+  t.is(fs.existsSync(seedPath), false, 'lock contention is checked before seeds open')
+  fs.unlinkSync(lockPath)
+  const worker = await startProtoWorker(options)
+  t.teardown(() => worker.stop())
+  t.ok(worker.runtime.getPublicKey(), 'startup succeeds after deliberate operator lock recovery')
+})
+
 for (const signal of ['SIGINT', 'SIGTERM']) {
   test(`host runner shuts down cleanly on ${signal} without publishing credentials`, { timeout: 30000 }, async (t) => {
+    const testnet = await createTestnet(3, t.teardown)
+    const storeDir = temporaryStore(t)
     const child = spawn(process.execPath, [path.join(WORKER_DIR, 'host/run.js')], {
       env: {
         ...process.env,
@@ -159,7 +287,8 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
         PROTO_DEVICE_ID: 'proto-r2-1',
         PROTO_KERNEL_TOPIC: '',
         PROTO_TRUSTED_KERNEL_KEYS: 'ab'.repeat(32),
-        PROTO_STORE_DIR: temporaryStore(t)
+        PROTO_STORE_DIR: storeDir,
+        PROTO_DHT_BOOTSTRAP: testnet.nodes.map(node => ` 127.0.0.1:${node.address().port} `).join(',')
       },
       stdio: ['ignore', 'pipe', 'pipe']
     })
@@ -186,6 +315,7 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
     t.alike(await exited, { code: 0, signal: null })
     t.is(stderr, '')
     t.is(stdout.includes('runner-secret'), false)
+    t.is(fs.existsSync(path.join(storeDir, '.proto-worker.lock')), false, 'clean shutdown releases the store lock')
   })
 }
 
@@ -195,7 +325,8 @@ test('host runner rejects invalid connection configuration with non-secret error
     [{ PROTO_RIG_PASSWORD: '' }, 'ERR_PASSWORD_REQUIRED'],
     [{ PROTO_RIG_PORT: 'invalid' }, 'ERR_DEVICE_PORT_INVALID'],
     [{ PROTO_TRUSTED_KERNEL_KEYS: '' }, 'ERR_TRUSTED_KERNEL_KEYS_REQUIRED'],
-    [{ PROTO_TRUSTED_KERNEL_KEYS: 'secret-invalid-key' }, 'ERR_TRUSTED_KERNEL_KEYS_INVALID']
+    [{ PROTO_TRUSTED_KERNEL_KEYS: 'secret-invalid-key' }, 'ERR_TRUSTED_KERNEL_KEYS_INVALID'],
+    ...['', '127.0.0.1', ':1234', '127.0.0.1:0', '127.0.0.1:65536', 'host:abc', 'host:1,', 'bad host:1', '[host]:1', '::1:1234', '-host:1'].map(PROTO_DHT_BOOTSTRAP => [{ PROTO_DHT_BOOTSTRAP }, 'ERR_DHT_BOOTSTRAP_INVALID'])
   ]) {
     const child = spawn(process.execPath, [path.join(WORKER_DIR, 'host/run.js')], {
       env: { ...process.env, MDK_REPO, PROTO_RIG_ADDRESS: '127.0.0.1', PROTO_RIG_PASSWORD: 'startup-secret', PROTO_RIG_PORT: '80', PROTO_TRUSTED_KERNEL_KEYS: 'ab'.repeat(32), ...config },

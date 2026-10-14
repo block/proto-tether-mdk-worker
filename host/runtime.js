@@ -12,6 +12,7 @@ const requireFromRuntime = createRequire(require.resolve(runtimeModule))
 const { WorkerRuntimeV2 } = requireFromRuntime('./index')
 const DHT = requireFromRuntime('hyperdht')
 const HyperswarmRPC = requireFromRuntime('@hyperswarm/rpc')
+const debug = requireFromRuntime('debug')('mdk:worker:runtime')
 const { serialize, deserialize } = requireFromRuntime('../kernel/lib/protocol/envelope')
 
 class AuthorizedWorkerRuntime extends WorkerRuntimeV2 {
@@ -36,10 +37,12 @@ class AuthorizedWorkerRuntime extends WorkerRuntimeV2 {
       try {
         return serialize(await this.handleRequest(deserialize(reqBuf)))
       } catch (err) {
+        debug('request error: %s', err.message)
         return serialize({ error: err.message })
       }
     })
     await this._server.listen()
+    debug('runtime RPC listening (key: %s...)', this._server.publicKey.toString('hex').slice(0, 16))
     if (this.kernelTopic) await this._joinDiscoveryTopic()
     return { publicKey: this._server.publicKey }
   }

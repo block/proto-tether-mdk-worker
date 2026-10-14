@@ -79,13 +79,13 @@ Each pool entry uses:
 
 Preserve the previous pool configuration before changing mining destinations. Verify cooling and device limits before increasing power.
 
-The reboot cooldown is process-local and resets when a new device instance is created after host restart. Preserve operator awareness of recent hardware operations across restarts; the runtime's identity seed storage does not persist the cooldown.
+The reboot cooldown is process-local and resets when a new device instance is created after host restart. The Kernel may automatically retry a command after a timeout or transport error, and its WAL recovery can re-queue dispatched or executing commands after a shared-process restart. An attempt that reached the rig before restart can therefore be sent again to a fresh worker within five minutes. Preserve operator awareness of recent hardware operations across restarts; the runtime's identity seed storage does not persist the cooldown or provide durable command deduplication.
 
 ## Failure semantics
 
 The HTTP client authenticates initially with a configured access token or by logging in with the device password. A refresh token is renewal material, not a standalone initial credential. Any authenticated request, including a write, may replay once only after an explicit HTTP 401 and successful token renewal. This is the sole retry path. Login and refresh `401` or `403` responses are reported as authentication failures; server failures retain their HTTP status and do not trigger a password fallback.
 
-The worker does not retry non-401 HTTP responses, connection errors, request timeouts, malformed JSON, malformed successful responses, or any other ambiguous outcome. A timeout or disconnect during a write has an unknown physical outcome and must not trigger an automatic retry. Read current device state before sending another write.
+The worker's HTTP client does not retry non-401 HTTP responses, connection errors, request timeouts, malformed JSON, malformed successful responses, or any other ambiguous outcome. A timeout or disconnect during a write has an unknown physical outcome. The Kernel's transport retry and WAL recovery are separate from this HTTP policy; configure orchestration to avoid replaying ambiguous physical commands across worker restarts. Read current device state before sending another write.
 
 Before and in `finally` after each attempted write, the worker invalidates affected reads: all reads for `reboot`; mining/telemetry/errors for `setPowerMode`; target/mining/telemetry for `setPowerTarget`; and pools/mining/errors for `setupPools`. `setLED` has no exposed read key. This ensures post-failure verification reaches firmware rather than stale cache.
 

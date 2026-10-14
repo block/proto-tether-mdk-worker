@@ -1,6 +1,7 @@
 'use strict'
 
 const path = require('node:path')
+const { isIP } = require('node:net')
 const { startProtoWorker } = require('./index')
 const { ProtoHttpClient } = require('../lib/http-client')
 const { DEFAULT_PORT, DEFAULT_PROTOCOL } = require('../lib/constants')
@@ -27,6 +28,7 @@ async function main () {
       ? process.env.PROTO_TRUSTED_KERNEL_KEYS.split(',').map(key => key.trim())
       : undefined,
     kernelTopic: process.env.PROTO_KERNEL_TOPIC || null,
+    bootstrap: parseBootstrap(process.env.PROTO_DHT_BOOTSTRAP),
     storeDir: path.resolve(process.env.PROTO_STORE_DIR || path.join(__dirname, '../store/proto-worker')),
     devices: [{ deviceId: process.env.PROTO_DEVICE_ID || 'proto-r2-1', config }]
   })
@@ -44,6 +46,21 @@ async function main () {
   process.once('SIGINT', stop)
   process.once('SIGTERM', stop)
   console.log(JSON.stringify({ workerId, publicKey: worker.runtime.getPublicKey().toString('hex') }))
+}
+
+function parseBootstrap (value) {
+  if (value === undefined) return undefined
+  return value.split(',').map(entry => {
+    const match = /^(?:\[([^\]]+)\]|([^:\s]+)):(\d+)$/.exec(entry.trim())
+    if (!match) throw new Error('ERR_DHT_BOOTSTRAP_INVALID')
+    const host = match[1] || match[2]
+    const port = Number(match[3])
+    const hostname = host.length <= 253 && host.split('.').every(label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(label))
+    if ((match[1] ? isIP(host) !== 6 : !isIP(host) && !hostname) || port < 1 || port > 65535) {
+      throw new Error('ERR_DHT_BOOTSTRAP_INVALID')
+    }
+    return { host, port }
+  })
 }
 
 main().catch(err => {
