@@ -171,6 +171,7 @@ test('detail channels work over authorized HRPC with independent sources and saf
   first.state.telemetry.hashboards[0].secret = 'CHANNEL-WIRE-SECRET'
   first.state.telemetry.hashboards[0].hashrate.secret = 'CHANNEL-WIRE-SECRET'
   second.state.system.cb_sn = 'R2-SECOND'
+  second.state.network.gateway = ' \t '
   second.state.telemetry.hashboards[0].hashrate.value = 20
 
   const rpc = new HyperswarmRPC({ bootstrap: testnet.bootstrap })
@@ -199,7 +200,7 @@ test('detail channels work over authorized HRPC with independent sources and saf
   }
   t.alike(values.errors, [{ name: 'firmware_error', code: 'FanSlow', source: 'fan', slot: 0, timestamp: 1764160757 }])
   t.is(values.pools[0].username, 'worker')
-  t.is(values.pools[0].stale, 0)
+  t.is(Object.hasOwn(values.pools[0], 'stale'), false, 'unreported stale shares remain absent on the wire')
   t.is(values.hashboards[0].hashrate_ths, 47.75)
   t.alike(values.hashboards[0].temperature_c, { inlet: 45, outlet: 68, avg: 56 })
   t.is(values.device_info.device_id, 'detail-1')
@@ -211,7 +212,9 @@ test('detail channels work over authorized HRPC with independent sources and saf
     t.is(first.state.requests.filter(request => request.method === 'GET' && request.path === pathname).length, 1, `${pathname} is shared by direct queries`)
   }
   t.is(first.state.requests.some(request => ['/api/v1/mining', '/api/v1/mining/target'].includes(request.path)), false, 'detail queries do not collect a full snapshot')
-  t.is((await pull('device_info', 'detail-2')).payload.value.serial_number, 'R2-SECOND')
+  const secondInfo = (await pull('device_info', 'detail-2')).payload.value
+  t.is(secondInfo.serial_number, 'R2-SECOND', 'missing network readings preserve identity on the wire')
+  t.is(Object.hasOwn(secondInfo.network, 'ip_gw'), false, 'blank gateway stays absent on the wire')
   t.is((await pull('hashboards', 'detail-2')).payload.value[0].hashrate_ths, 20, 'board state stays isolated by device')
   t.alike((await pull('errors', 'detail-2')).payload.value, [])
 
@@ -230,6 +233,41 @@ test('detail channels work over authorized HRPC with independent sources and saf
   const updated = await pull('pools')
   t.is(updated.payload.value[0].url, 'stratum+tcp://new-pool.example:3333')
   t.is(updated.payload.value[0].username, 'new-account', 'pool writes invalidate the new channel cache')
+})
+
+test('HTTP failures remain errors for direct and aggregate detail telemetry over HRPC', { timeout: 60000 }, async (t) => {
+  const testnet = await createTestnet(3, t.teardown)
+  const statusByPath = {}
+  const rig = createServer({ statusByPath })
+  t.teardown(() => rig.close())
+  const address = await rig.ready
+  const rpc = new HyperswarmRPC({ bootstrap: testnet.bootstrap })
+  t.teardown(() => rpc.destroy())
+  const worker = await startProtoWorker({
+    workerId: 'proto-http-failure',
+    bootstrap: testnet.bootstrap,
+    storeDir: temporaryStore(t),
+    trustedKernelKeys: [rpc.dht.defaultKeyPair.publicKey],
+    devices: [{ deviceId: 'failure-1', config: { address: '127.0.0.1', port: address.port, password: 'test-password', cacheMs: 0 } }]
+  })
+  t.teardown(() => worker.stop())
+  const pull = async (type) => deserialize(await rpc.request(worker.runtime.getPublicKey(), 'mdk', serialize(build({
+    action: 'telemetry.pull', type: 'request', sender: 'failure-caller', target: 'proto-http-failure', deviceId: 'failure-1', payload: { query: { type } }
+  }))))
+
+  t.alike((await pull('errors')).payload.value, [], 'a successful empty errors response means no active errors')
+  for (const [name, independent] of [['errors', 'pools'], ['pools', 'errors']]) {
+    const pathname = `/api/v1/${name}`
+    statusByPath[pathname] = 503
+    const direct = await pull(name)
+    t.is(direct.payload.error, 'ERR_HTTP_RESPONSE: 503', `${name} reports its HTTP failure`)
+    t.is(Object.hasOwn(direct.payload, 'value'), false, `${name} never reports failed reads as empty values`)
+    const aggregate = (await pull('metrics')).payload.metrics
+    t.alike(aggregate[name], { error: 'ERR_HTTP_RESPONSE: 503' }, `${name} remains an error inside metrics`)
+    t.ok(Array.isArray(aggregate[independent]), `${independent} still succeeds independently`)
+    t.is(aggregate.power, 3250, 'independent scalar telemetry still succeeds')
+    delete statusByPath[pathname]
+  }
 })
 
 test('host requires valid trusted transport keys before opening runtime resources', async (t) => {

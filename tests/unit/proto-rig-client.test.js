@@ -1044,14 +1044,15 @@ test('device info projects identity and network without hardware or firmware sib
   })
 })
 
-test('device info validates required network and optional identity types without tightening snapshot', async (t) => {
+test('device info validates present network and identity types without tightening snapshot', async (t) => {
   for (const [source, change, error] of [
     ['system', { product_name: 1 }, /ERR_SYSTEM_RESPONSE_INVALID/],
     ['system', { model: null }, /ERR_SYSTEM_RESPONSE_INVALID/],
     ['system', { cb_sn: {} }, /ERR_SYSTEM_RESPONSE_INVALID/],
     ['system', { manufacturer: false }, /ERR_SYSTEM_RESPONSE_INVALID/],
     ['network', { dhcp: 'true' }, /ERR_NETWORK_RESPONSE_INVALID/],
-    ['network', { ip: '' }, /ERR_NETWORK_RESPONSE_INVALID/],
+    ['network', { dhcp: null }, /ERR_NETWORK_RESPONSE_INVALID/],
+    ['network', { ip: false }, /ERR_NETWORK_RESPONSE_INVALID/],
     ['network', { gateway: null }, /ERR_NETWORK_RESPONSE_INVALID/],
     ['network', { netmask: 1 }, /ERR_NETWORK_RESPONSE_INVALID/],
     ['network', { mac: [] }, /ERR_NETWORK_RESPONSE_INVALID/],
@@ -1063,6 +1064,33 @@ test('device info validates required network and optional identity types without
     const client = new ProtoRigClient({ id: 'R2-001', api: apiFixture({ getSystemInfo: async () => system, getNetworkInformation: async () => network }) })
     await t.exception(client.getDeviceInfo(), error)
     if (['manufacturer', 'mac', 'hostname'].some(key => Object.hasOwn(change, key))) t.is((await client.getSnap()).config.model, 'R2')
+  }
+})
+
+test('device info preserves identity when optional network fields are missing or blank', async (t) => {
+  for (const info of [{}, { ip: '', gateway: ' \t ', netmask: '', mac: '\n', hostname: ' ' }]) {
+    const client = new ProtoRigClient({
+      id: 'R2-001',
+      api: apiFixture({ getNetworkInformation: async () => ({ 'network-info': info }) })
+    })
+    t.alike(await client.getDeviceInfo(), {
+      device_id: 'R2-001', manufacturer: 'Proto', model: 'R2', serial_number: 'R2-001', network: {}
+    })
+    await t.exception(client.getSnap(), /ERR_NETWORK_RESPONSE_INVALID/, 'snapshot still requires its network fields')
+  }
+
+  for (const [field, output] of [['dhcp', 'mode'], ['ip', 'ip_address'], ['gateway', 'ip_gw'], ['netmask', 'ip_netmask'], ['mac', 'mac'], ['hostname', 'hostname']]) {
+    for (const value of field === 'dhcp' ? [undefined] : [undefined, '', ' \t\n ']) {
+      const network = await apiFixture().getNetworkInformation()
+      network['network-info'][field] = value
+      const client = new ProtoRigClient({ id: 'R2-001', api: apiFixture({ getNetworkInformation: async () => network }) })
+      const result = await client.getDeviceInfo()
+      t.is(Object.hasOwn(result.network, output), false, `${field} is omitted when missing or blank`)
+      t.is(result.serial_number, 'R2-001', 'network omissions preserve identity')
+      if (['dhcp', 'ip', 'gateway', 'netmask'].includes(field)) {
+        await t.exception(client.getSnap(), /ERR_NETWORK_RESPONSE_INVALID/, `snapshot still requires ${field}`)
+      }
+    }
   }
 })
 
@@ -1127,7 +1155,7 @@ test('detail channels preserve empty collections and absent optional readings', 
   t.alike(await client.getDeviceInfo(), { device_id: 'R2-001', network: { mode: 'dhcp', ip_address: '192.0.2.10', ip_gw: '192.0.2.1', ip_netmask: '255.255.255.0' } })
 
   const minimal = new ProtoRigClient({ id: 'R2-001', api: apiFixture() })
-  t.alike(await minimal.getPools(), [{ url: 'stratum+tcp://pool:3333', username: 'worker', accepted: 10, rejected: 1, stale: 0, status: 'Active' }])
+  t.alike(await minimal.getPools(), [{ url: 'stratum+tcp://pool:3333', username: 'worker', accepted: 10, rejected: 1, status: 'Active' }])
   t.alike(await minimal.getHashboards(), [
     { index: 0, temperature_c: { inlet: 45, outlet: 68, avg: 56 } },
     { index: 1, temperature_c: { inlet: 46, outlet: 70, avg: 58 } }
@@ -1135,7 +1163,9 @@ test('detail channels preserve empty collections and absent optional readings', 
   const partial = new ProtoRigClient({ id: 'R2-001', api: apiFixture({ getSystemInfo: async () => ({ 'system-info': { os: {}, web_server: { name: '' } } }) }) })
   t.alike(await partial.getFirmwareInfo(), { os: {}, web_server: { name: '' } })
   const missingPoolOptions = new ProtoRigClient({ id: 'R2-001', api: apiFixture({ getPools: async () => [{ url: 'stratum+tcp://pool:3333', accepted: 0, rejected: 0 }] }) })
-  t.alike(await missingPoolOptions.getPools(), [{ url: 'stratum+tcp://pool:3333', accepted: 0, rejected: 0, stale: 0 }])
+  t.alike(await missingPoolOptions.getPools(), [{ url: 'stratum+tcp://pool:3333', accepted: 0, rejected: 0 }])
+  const zeroStale = new ProtoRigClient({ id: 'R2-001', api: apiFixture({ getPools: async () => [{ url: 'stratum+tcp://pool:3333', accepted: 0, rejected: 0, stale: 0 }] }) })
+  t.alike(await zeroStale.getPools(), [{ url: 'stratum+tcp://pool:3333', accepted: 0, rejected: 0, stale: 0 }])
 })
 
 test('detail getters reject malformed source collections and required envelopes', async (t) => {
