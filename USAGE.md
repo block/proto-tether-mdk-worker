@@ -4,7 +4,7 @@
 
 Configure each device in `WorkerRuntimeV2` with a `deviceId` and a `config` object.
 
-The bundled host in `host/index.js` exposes `startProtoWorker({ workerId, devices, storeDir, kernelTopic, ...runtimeOptions })`, returning `{ runtime, stop }`. `storeDir` is required and holds the runtime's persistent identity seeds. `stop()` is idempotent. Set `MDK_REPO` to a checkout, or supply the installed `@tetherto/mdk` monorepo. See [Host the worker](README.md#host-the-worker) for installation, environment settings, and Kernel registration. The worker runtime package is not yet published separately.
+The bundled host in `host/index.js` exposes `startProtoWorker({ workerId, devices, storeDir, trustedKernelKeys, kernelTopic, ...runtimeOptions })`, returning `{ runtime, stop }`. `storeDir` is required and holds the runtime's persistent identity seeds. `trustedKernelKeys` is a required non-empty array of 64-character hex strings or 32-byte Buffers representing allowed Kernel outbound DHT transport keys. An MDK Kernel's RPC server key is a different identity; use `kernel.hrpcListener.getDht().defaultKeyPair.publicKey` after starting Kernel. Only those transport peers can reach any RPC handler, regardless of the envelope's sender name. `stop()` is idempotent. Set `MDK_REPO` to a checkout, or supply the installed `@tetherto/mdk` monorepo. See [Host the worker](README.md#host-the-worker) for installation, environment settings, and Kernel registration. The worker runtime package is not yet published separately.
 
 Device options:
 
@@ -13,7 +13,7 @@ Device options:
 | `address` | Yes | Non-empty host-only string for the Proto Rig public API v1 endpoint. Userinfo, ports, paths, queries, and fragments are rejected; configure the port separately. |
 | `port` | No | HTTP port. Defaults to `80`. |
 | `protocol` | No | `http` or `https`. Defaults to `http` to match the public API, which means credentials and tokens travel in cleartext. `https` requires a rig with a verifiable certificate or a custom `fetchImpl`; see [Transport security](README.md#transport-security). |
-| `fetchImpl` | No | Fetch-compatible function supplied programmatically in device config. Defaults to `globalThis.fetch`. Use a custom implementation only to apply an explicit TLS trust and hostname policy. |
+| `fetchImpl` | No | Fetch-compatible function supplied programmatically in device config. Defaults to `globalThis.fetch`. Custom implementations must honor `redirect: 'error'` and the abort signal. Use a custom implementation only to apply an explicit TLS trust and hostname policy. |
 | `timeout` | No | Request timeout in whole milliseconds from `1` through `2147483647`. Defaults to `10000`. |
 | `password` | Conditional | Device password. Use secret management. Required when `accessToken` is absent. Supports initial login and renewal after a rejected access token. |
 | `accessToken` | Conditional | Existing bearer access token. Use secret management. Required when `password` is absent. Without a password or refresh token, an explicit `401` ends authentication. |

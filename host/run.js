@@ -23,6 +23,9 @@ async function main () {
   const workerId = process.env.PROTO_WORKER_ID || 'proto-worker'
   const worker = await startProtoWorker({
     workerId,
+    trustedKernelKeys: process.env.PROTO_TRUSTED_KERNEL_KEYS
+      ? process.env.PROTO_TRUSTED_KERNEL_KEYS.split(',').map(key => key.trim())
+      : undefined,
     kernelTopic: process.env.PROTO_KERNEL_TOPIC || null,
     storeDir: path.resolve(process.env.PROTO_STORE_DIR || path.join(__dirname, '../store/proto-worker')),
     devices: [{ deviceId: process.env.PROTO_DEVICE_ID || 'proto-r2-1', config }]

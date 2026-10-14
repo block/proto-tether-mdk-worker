@@ -29,13 +29,21 @@ npm run setup:mdk -- ../mdk
 
 The setup script supports both the minimum MDK revision's per-package installer and the root workspace introduced in MDK v0.9. For the workspace layout it installs only `@tetherto/mdk-worker` and its dependencies. To host a Kernel as well, run `npm ci` in the MDK repository root.
 
-Start the bundled single-device host. Supply the address and password through your environment or secret management:
+Start the bundled single-device host. Supply the address, password, and trusted Kernel transport keys through your environment or secret management:
 
 ```bash
 MDK_REPO=../mdk npm run host
 ```
 
-The host requires `PROTO_RIG_ADDRESS` and `PROTO_RIG_PASSWORD`. Optional environment settings:
+The host requires `PROTO_RIG_ADDRESS`, `PROTO_RIG_PASSWORD`, and `PROTO_TRUSTED_KERNEL_KEYS`. The last setting is a comma-separated list of 64-character hex public keys. The host rejects missing or malformed keys before opening runtime resources and rejects connections from every other peer. Authenticate the keys through your deployment configuration.
+
+Use the Kernel's **outbound DHT transport key**, which differs from the RPC server key returned by `kernel.getPublicKey()`. With the supported MDK Kernel started, obtain it programmatically:
+
+```js
+const transportKey = kernel.hrpcListener.getDht().defaultKeyPair.publicKey.toString('hex')
+```
+
+Set `PROTO_TRUSTED_KERNEL_KEYS` to that value on the worker host. Keep the Kernel's identity storage persistent, and update the allowlist and restart the worker when rotating the Kernel's transport identity. Optional environment settings:
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
@@ -62,9 +70,11 @@ async function main () {
 
   if (!address) throw new Error('ERR_ADDRESS_REQUIRED')
   if (!password) throw new Error('ERR_PASSWORD_REQUIRED')
+  const trustedKernelKeys = process.env.PROTO_TRUSTED_KERNEL_KEYS?.split(',').map(key => key.trim())
 
   const worker = await startProtoWorker({
     workerId: 'proto-worker',
+    trustedKernelKeys,
     storeDir: path.resolve(__dirname, 'store/proto-worker'),
     kernelTopic: process.env.PROTO_KERNEL_TOPIC || null,
     devices: [
@@ -98,7 +108,9 @@ main().catch(err => {
 
 Run this example with `MDK_REPO` pointing to the checkout. Alternatively, install the monorepo as `@tetherto/mdk`; the host resolves `@tetherto/mdk/backend/core/mdk-worker` when `MDK_REPO` is unset. Follow MDK's [Test a Worker guide](https://docs.mdk.tether.io/guides/workers/test-a-worker) for that installation and Kernel bootstrap.
 
-Register the runtime's public key with an existing Kernel using `await kernel.registerWorker(worker.runtime.getPublicKey())`, or configure the same discovery topic on both processes. Keep `storeDir` on persistent storage to preserve that public key across restarts. A new seed directory creates a new identity. The host helper always loads this repository's contract directory and requires a non-empty `storeDir`.
+Register the runtime's public key with an existing Kernel using `await kernel.registerWorker(worker.runtime.getPublicKey())`, or configure the same discovery topic on both processes. Registration and discovery do not authorize inbound peers; the worker's `trustedKernelKeys` must include that Kernel's outbound transport identity. For a shared process, pass `[kernel.hrpcListener.getDht().defaultKeyPair.publicKey]` after starting Kernel. The option accepts an array of 64-character hex strings or 32-byte Buffers. Keep `storeDir` on persistent storage to preserve the worker public key across restarts. A new seed directory creates a new identity. The host helper always loads this repository's contract directory and requires a non-empty `storeDir`.
+
+Use this bundled host for network access to rigs. It adapts MDK transport startup to install a peer firewall before listening; instantiating upstream `WorkerRuntimeV2` directly does not enforce this allowlist. The adapter retains the inherited dispatch and device lifecycle, and CI verifies it against the supported runtime matrix.
 
 ## Test
 
@@ -148,6 +160,8 @@ The script prints JSON with `deviceId`, `status`, `hashrateThs`, `powerW`, `temp
 Treat command calls as physical operations. Verify thermal state, power limits, and pool configuration before issuing commands.
 
 Reboot attempts have an enforced five-minute per-device cooldown. Failed attempts, including timeouts with unknown outcomes, consume the cooldown, and concurrent reboots are rejected. This guard lives in the device instance and resets when the host restarts; it is not a durable record of hardware operations.
+
+HTTP redirects are rejected for reads, authentication, and writes. They surface as `ERR_DEVICE_CONNECTION`; a redirect cannot resend a physical operation or convert it into a successful read. Custom `fetchImpl` implementations must honor the supplied `redirect: 'error'` policy.
 
 Any authenticated request, including a write, may replay once only after an explicit HTTP 401 and successful credential renewal. A timeout, disconnect, malformed response, or other ambiguous write outcome is never retried. Affected read caches are invalidated before and after an attempted write; read the device state before deciding the next operator action.
 

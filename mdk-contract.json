@@ -59,8 +59,8 @@
       },
       {
         "name": "setupPools",
-        "description": "Replaces the configured mining pools with one to three entries.",
-        "constraints": "The pools parameter must be an array containing one to three entries. Preserve the previous configuration before changing mining destinations. Do not retry after an unknown network outcome.",
+        "description": "Replaces the configured mining pools with one to three entries. Required entry fields are non-empty url and worker_name strings; optional entry fields are worker_password and pool strings.",
+        "constraints": "The pools parameter must be an array containing one to three entries. URLs must include a hostname and omit userinfo. worker_password defaults to \"\" and pool defaults to \"\". appendId defaults to true and appends .<deviceId> to worker_name; false uses the bare worker name. Example pools: [{\"url\":\"stratum+tcp://pool.example:3333\",\"worker_name\":\"account.worker\"}]. Preserve the previous configuration before changing mining destinations. Do not retry after an unknown network outcome.",
         "handler": "src/commands/setup-pools.js",
         "params": [
           { "name": "pools", "type": "object", "required": true },
