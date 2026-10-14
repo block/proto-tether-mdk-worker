@@ -118,7 +118,7 @@ test('WorkerRuntimeV2 keeps device state isolated and publishes clean envelopes'
     const capability = await runtime.handleRequest(capabilityRequest)
     assertResponseEnvelope(t, capability, capabilityRequest, ACTIONS.CAPABILITY_RESPONSE, null)
     t.is(capability.payload.contract.metadata.provider, 'proto')
-    t.is(capability.payload.contract.capabilities.telemetry.length, 13)
+    t.is(capability.payload.contract.capabilities.telemetry.length, 18)
     t.ok(capability.payload.contract.capabilities.telemetry.some(entry => entry.name === 'health'))
     for (const entry of capability.payload.contract.capabilities.telemetry) t.is(entry.handler, undefined)
     for (const entry of capability.payload.contract.capabilities.commands) t.is(entry.handler, undefined)
@@ -137,7 +137,7 @@ test('WorkerRuntimeV2 keeps device state isolated and publishes clean envelopes'
     const metrics = await runtime.handleRequest(metricsRequest)
     assertResponseEnvelope(t, metrics, metricsRequest, ACTIONS.TELEMETRY_RESPONSE, 'proto-1')
     t.alike(metrics.payload.metrics.health, { status: 'OK' })
-    t.is(Object.keys(metrics.payload.metrics).length, 13)
+    t.is(Object.keys(metrics.payload.metrics).length, 18)
 
     const serializedTelemetry = `${JSON.stringify(health)}\n${JSON.stringify(metrics)}`.toLowerCase()
     for (const forbidden of [

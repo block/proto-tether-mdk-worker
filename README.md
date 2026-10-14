@@ -146,7 +146,9 @@ PROTO_RIG_PASSWORD="$PROTO_RIG_PASSWORD" npm run mock
 
 The mock binds to loopback and implements the public API v1 behavior used by this worker.
 
-The contract declares 13 telemetry channels. Its worker-owned `health` channel returns only `{ status }`: `OK` when device status is normal, including the API's `204 No mining statistics` startup state; `DEGRADED` for active firmware errors; or `OFFLINE` when the status read fails. Declaring this handler prevents the minimum supported runtime from installing a credential-bearing fallback. Direct health and aggregate metrics responses never publish device options, environment, runtime configuration, credentials, tokens, or failure details.
+The contract declares 18 telemetry channels. Separate `errors`, `pools`, `hashboards`, `device_info`, and `firmware_info` queries expose diagnostics and inventory without collecting a full snapshot. They reuse the existing per-device source caches and write invalidation. The existing `snap` shape is unchanged. See [Telemetry](USAGE.md#telemetry) for field shapes and units.
+
+The worker-owned `health` channel returns only `{ status }`: `OK` when device status is normal, including the API's `204 No mining statistics` startup state; `DEGRADED` for active firmware errors; or `OFFLINE` when the status read fails. Declaring this handler prevents the minimum supported runtime from installing a credential-bearing fallback. The health channel never publishes device options, environment, runtime configuration, credentials, tokens, or transport-failure details, including inside aggregate metrics.
 
 ## Read-only hardware check
 
