@@ -219,7 +219,7 @@ test('detail channels work over authorized HRPC with independent sources and saf
   t.alike((await pull('errors', 'detail-2')).payload.value, [])
 
   const metrics = await pull('metrics')
-  t.is(Object.keys(metrics.payload.metrics).length, 18)
+  t.is(Object.keys(metrics.payload.metrics).length, 19)
   t.ok(metrics.payload.metrics.snap.error, 'a snapshot failure stays isolated to its channel')
   t.alike(metrics.payload.metrics.errors, values.errors)
   t.alike(metrics.payload.metrics.firmware_info, values.firmware_info)
