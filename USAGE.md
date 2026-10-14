@@ -45,6 +45,23 @@ The worker exposes these telemetry values from `mdk-contract.json`:
 | `fan_speed` | `RPM` | number | Average speed of all cooling fans. |
 | `snap` | `` | object | Structured miner statistics and non-secret configuration metadata. |
 | `health` | `` | object | Credential-safe device health: `{ status: 'OK' }`, `{ status: 'DEGRADED' }`, or `{ status: 'OFFLINE' }`. |
+| `errors` | `` | array | Active firmware error metadata and identifier-like codes, with raw messages omitted. |
+| `pools` | `` | array | Credential-free pool configuration, runtime status, and share counters. |
+| `hashboards` | `` | array | Measured per-board temperatures and available hashrate, power, efficiency, voltage, and current. |
+| `device_info` | `` | object | Device identity and non-secret network configuration. |
+| `firmware_info` | `` | object | OS version/build metadata and reported software component versions. |
+
+Query these channels with `telemetry.pull`, addressing a device and setting `payload.query.type` to the channel name, for example `{ "query": { "type": "errors" } }`. They are also included in aggregate `metrics`. Each uses only its own source endpoints; a failed mining-statistics or power-target read does not prevent querying device or firmware information. HTTP failures remain errors, rather than being reported as empty data. Missing optional fields are omitted in wire JSON.
+
+| Channel | Returned fields |
+| --- | --- |
+| `errors` | Array of `{ name: 'firmware_error', code?, source?, slot?, timestamp? }`. `code` comes from `error_code` only when it matches `[A-Za-z][A-Za-z0-9_]{0,63}`; other string codes and raw messages are omitted. `timestamp` is the firmware's Unix-seconds timestamp. Empty array means no active errors. |
+| `pools` | Array of `{ url, username?, accepted, rejected, stale, status?, id?, priority?, name?, protocol? }`. Share counts are non-negative safe integers; absent `stale` is `0`. Passwords, authority keys, and undeclared siblings are omitted. URLs with userinfo are rejected. This read shape differs from `setupPools` input fields below. |
+| `hashboards` | Array of `{ index, serial_number?, temperature_c: { inlet, outlet, avg }, hashrate_ths?, power_w?, efficiency_w_ths?, voltage_v?, current_a? }`. Optional metrics are returned only when firmware supplies a valid value with the declared source unit. Temperatures are measured board inlet/outlet/average values, not inferred ASIC chip temperatures. No frequencies, per-ASIC detail, or synthesized time windows are reported. |
+| `device_info` | `{ device_id, product_name?, manufacturer?, model?, serial_number?, network: { mode, ip_address, ip_gw, ip_netmask, mac?, hostname? } }`. Network mode is `dhcp` or `static`. |
+| `firmware_info` | Optional `os` object with `name`, `version`, `git_hash`, `variant`, `build_datetime_utc`, and `machine`; optional `mining_driver_sw`, `pool_interface_sw`, `web_server`, `web_dashboard`, and `hashboard_firmware` objects with `name` and `version`. Present leaves must be strings. OS runtime status and free-form update messages are omitted. |
+
+These additions provide the diagnostic channel names exposed by the [Antminer contract](https://github.com/bitmain-official/antminer-mdk-worker/blob/4fd776b4a048a1bc8284ec2eceed82b4631f960c/mdk-contract.json) and [WhatsMiner contract](https://github.com/whatsminer/whatsminer-mdk-worker/blob/a47fa82020454f9bfa9963ccaaa319b7948e8aa2/mdk-contract.json), using fields reported by [Proto public API v1](https://block.github.io/proto-fleet/proto-api-docs/). They do not add system logs, firmware updates, network writes, extra performance modes, or ASIC-level diagnostics. The existing `snap` response and its field validation remain unchanged.
 
 `status` uses MDK status values. Mining maps to `mining`. Stopped and Curtailed map to `sleeping`. PoweringOff maps to `not_mining`. Active device errors map to `error`. Other non-mining startup states map to `not_mining`. A documented `204 No mining statistics` response is handled as the `Uninitialized` startup state; a power-target read in that state reports `ERR_MINING_STATISTICS_UNAVAILABLE`.
 

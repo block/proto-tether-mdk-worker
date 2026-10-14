@@ -39,8 +39,24 @@ function createState (opts = {}) {
         efficiency: { value: 34.03, unit: 'J/TH' }
       },
       hashboards: [
-        { index: 0, temperature: { unit: '°C', inlet: 45, outlet: 68, average: 56 } },
-        { index: 1, temperature: { unit: '°C', inlet: 46, outlet: 70, average: 58 } }
+        {
+          index: 0,
+          serial_number: 'HB001',
+          hashrate: { value: 47.75, unit: 'TH/s' },
+          temperature: { unit: '°C', inlet: 45, outlet: 68, average: 56 },
+          power: { value: 1625, unit: 'W' },
+          efficiency: { value: 34.03, unit: 'J/TH' },
+          voltage: { value: 12.1, unit: 'V' },
+          current: { value: 134.3, unit: 'A' }
+        },
+        {
+          index: 1,
+          serial_number: 'HB002',
+          hashrate: { value: 47.75, unit: 'TH/s' },
+          temperature: { unit: '°C', inlet: 46, outlet: 70, average: 58 },
+          power: { value: 1625, unit: 'W' },
+          efficiency: { value: 34.03, unit: 'J/TH' }
+        }
       ]
     },
     pools: [
@@ -53,14 +69,16 @@ function createState (opts = {}) {
       fans: [{ rpm: 5000 }, { rpm: 5100 }]
     },
     network: {
+      mac: '02:00:00:00:00:01',
+      hostname: 'proto-r2-mock',
       dhcp: true,
       ip: '192.0.2.10',
       netmask: '255.255.255.0',
       gateway: '192.0.2.1'
     },
-    // Mirrors the key set observed on R2 firmware. Most of these are fields the
-    // worker deliberately does not publish; they are here so the snapshot tests
-    // exercise the projection rather than a conveniently minimal payload.
+    // Mirrors the key set observed on R2 firmware, including undeclared runtime
+    // and update fields so snapshot and detail tests exercise safe projection
+    // rather than a conveniently minimal payload.
     // uptime_seconds tracks slightly ahead of mining.reboot_uptime_s because the
     // OS boots before the miner process starts.
     system: {

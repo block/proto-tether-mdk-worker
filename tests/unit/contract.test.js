@@ -10,10 +10,17 @@ const WORKER_DIR = path.resolve(__dirname, '../..')
 
 test('contract loads every V2 handler and strips private paths', async (t) => {
   const loaded = loadContract(WORKER_DIR)
-  t.is(loaded.entries.telemetry.size, 13)
+  t.is(loaded.entries.telemetry.size, 18)
   t.is(loaded.entries.commands.size, 5)
   t.is(loaded.contract.metadata.provider, 'proto')
   t.ok(loaded.entries.telemetry.has('health'))
+  for (const [name, type] of [
+    ['errors', 'array'], ['pools', 'array'], ['hashboards', 'array'],
+    ['device_info', 'object'], ['firmware_info', 'object']
+  ]) {
+    t.ok(loaded.entries.telemetry.has(name), `contract loads ${name}`)
+    t.is(loaded.publishedContract.capabilities.telemetry.find(entry => entry.name === name)?.type, type, `${name} has a discoverable result type`)
+  }
 
   const setPowerTarget = loaded.publishedContract.capabilities.commands.find(command => command.name === 'setPowerTarget')
   const watts = setPowerTarget.params.find(param => param.name === 'watts')

@@ -156,6 +156,82 @@ test('host rejects missing persistent storage before creating a runtime', async 
   await t.exception(startProtoWorker({ workerId: 'proto-host', devices: [] }), /ERR_WORKER_STORE_DIR_REQUIRED/)
 })
 
+test('detail channels work over authorized HRPC with independent sources and safe projections', { timeout: 60000 }, async (t) => {
+  const testnet = await createTestnet(3, t.teardown)
+  const statusByPath = { '/api/v1/mining': 204, '/api/v1/mining/target': 503 }
+  const first = createServer({ password: 'detail-first-password', statusByPath })
+  const second = createServer({ password: 'detail-second-password', tokenSeq: 100 })
+  t.teardown(() => first.close())
+  t.teardown(() => second.close())
+  const [firstAddress, secondAddress] = await Promise.all([first.ready, second.ready])
+  first.state.errors = [{ source: 'fan', slot: 0, error_code: 'FanSlow', timestamp: 1764160757, message: 'CHANNEL-WIRE-SECRET' }]
+  first.state.pools[0].password = 'CHANNEL-WIRE-SECRET'
+  first.state.system.os.status = { token: 'CHANNEL-WIRE-SECRET' }
+  first.state.system.os.accessToken = 'CHANNEL-WIRE-SECRET'
+  first.state.telemetry.hashboards[0].secret = 'CHANNEL-WIRE-SECRET'
+  first.state.telemetry.hashboards[0].hashrate.secret = 'CHANNEL-WIRE-SECRET'
+  second.state.system.cb_sn = 'R2-SECOND'
+  second.state.telemetry.hashboards[0].hashrate.value = 20
+
+  const rpc = new HyperswarmRPC({ bootstrap: testnet.bootstrap })
+  t.teardown(() => rpc.destroy())
+  const worker = await startProtoWorker({
+    workerId: 'proto-details',
+    bootstrap: testnet.bootstrap,
+    storeDir: temporaryStore(t),
+    trustedKernelKeys: [rpc.dht.defaultKeyPair.publicKey],
+    devices: [
+      { deviceId: 'detail-1', config: { address: '127.0.0.1', port: firstAddress.port, password: 'detail-first-password', cacheMs: 5000 } },
+      { deviceId: 'detail-2', config: { address: '127.0.0.1', port: secondAddress.port, password: 'detail-second-password', cacheMs: 5000 } }
+    ]
+  })
+  t.teardown(() => worker.stop())
+  const send = async (action, deviceId, payload) => deserialize(await rpc.request(worker.runtime.getPublicKey(), 'mdk', serialize(build({
+    action, type: 'request', sender: 'detail-caller', target: 'proto-details', deviceId, payload
+  }))))
+  const pull = (type, deviceId = 'detail-1') => send('telemetry.pull', deviceId, { query: { type } })
+  const values = {}
+  for (const name of ['errors', 'pools', 'hashboards', 'device_info', 'firmware_info']) {
+    const response = await pull(name)
+    t.is(response.payload.name, name)
+    t.is(response.payload.error, undefined, `${name} succeeds without mining statistics`)
+    values[name] = response.payload.value
+  }
+  t.alike(values.errors, [{ name: 'firmware_error', code: 'FanSlow', source: 'fan', slot: 0, timestamp: 1764160757 }])
+  t.is(values.pools[0].username, 'worker')
+  t.is(values.pools[0].stale, 0)
+  t.is(values.hashboards[0].hashrate_ths, 47.75)
+  t.alike(values.hashboards[0].temperature_c, { inlet: 45, outlet: 68, avg: 56 })
+  t.is(values.device_info.device_id, 'detail-1')
+  t.is(values.device_info.network.hostname, 'proto-r2-mock')
+  t.is(values.firmware_info.os.version, '1.8.2')
+  t.is(values.firmware_info.mining_driver_sw.version, '1.8.2')
+
+  for (const pathname of ['/api/v1/errors', '/api/v1/pools', '/api/v1/telemetry', '/api/v1/system', '/api/v1/network']) {
+    t.is(first.state.requests.filter(request => request.method === 'GET' && request.path === pathname).length, 1, `${pathname} is shared by direct queries`)
+  }
+  t.is(first.state.requests.some(request => ['/api/v1/mining', '/api/v1/mining/target'].includes(request.path)), false, 'detail queries do not collect a full snapshot')
+  t.is((await pull('device_info', 'detail-2')).payload.value.serial_number, 'R2-SECOND')
+  t.is((await pull('hashboards', 'detail-2')).payload.value[0].hashrate_ths, 20, 'board state stays isolated by device')
+  t.alike((await pull('errors', 'detail-2')).payload.value, [])
+
+  const metrics = await pull('metrics')
+  t.is(Object.keys(metrics.payload.metrics).length, 18)
+  t.ok(metrics.payload.metrics.snap.error, 'a snapshot failure stays isolated to its channel')
+  t.alike(metrics.payload.metrics.errors, values.errors)
+  t.alike(metrics.payload.metrics.firmware_info, values.firmware_info)
+  const wire = JSON.stringify({ values, metrics })
+  for (const forbidden of ['CHANNEL-WIRE-SECRET', 'detail-first-password', 'mock-access-', 'mock-refresh-', 'accessToken', 'password']) {
+    t.is(wire.includes(forbidden), false, `detail wire responses omit ${forbidden}`)
+  }
+
+  const command = await send('command.request', 'detail-1', { commandId: 'update-detail-pool', command: 'setupPools', params: { pools: [{ url: 'stratum+tcp://new-pool.example:3333', worker_name: 'new-account' }], appendId: false } })
+  t.is(command.payload.status, 'SUCCESS')
+  const updated = await pull('pools')
+  t.is(updated.payload.value[0].url, 'stratum+tcp://new-pool.example:3333')
+  t.is(updated.payload.value[0].username, 'new-account', 'pool writes invalidate the new channel cache')
+})
+
 test('host requires valid trusted transport keys before opening runtime resources', async (t) => {
   const storeDir = path.join(temporaryStore(t), 'unopened')
   for (const [trustedKernelKeys, error] of [

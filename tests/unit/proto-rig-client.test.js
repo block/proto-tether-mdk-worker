@@ -865,3 +865,356 @@ test('commands do not retry connection rejections', async (t) => {
   await t.exception(client.setLED(true), /ECONNRESET/)
   t.is(calls, 1)
 })
+
+test('errors channel projects identifiers and metadata without free-form firmware text', async (t) => {
+  const client = new ProtoRigClient({
+    id: 'R2-001',
+    api: apiFixture({
+      getErrors: async () => [
+        { error_code: 'FanSlow_3', source: 'fan', slot: 3, timestamp: 1764160757, message: 'password-secret', arbitrary: 'secret' },
+        { error_code: 'A'.repeat(64) },
+        ...['', 'token-secret', 'contains spaces', '3FanSlow', 'érror', 'A'.repeat(65), 'FanSlow\n', 'FanSlow\r'].map(errorCode => ({ error_code: errorCode })),
+        {}
+      ]
+    })
+  })
+  t.alike(await client.getErrors(), [
+    { name: 'firmware_error', code: 'FanSlow_3', source: 'fan', slot: 3, timestamp: 1764160757 },
+    { name: 'firmware_error', code: 'A'.repeat(64) },
+    ...Array.from({ length: 9 }, () => ({ name: 'firmware_error' }))
+  ])
+  const snap = await client.getSnap()
+  t.alike(snap.stats.errors[0], { name: 'firmware_error', source: 'fan', slot: 3, timestamp: 1764160757 })
+})
+
+test('errors channel rejects malformed code and metadata while snapshot keeps ignoring code', async (t) => {
+  for (const error of [
+    { error_code: null }, { error_code: 1 }, { error_code: {} },
+    { source: 'unknown' }, { slot: 1.5 }, { timestamp: Number.MAX_SAFE_INTEGER + 1 }
+  ]) {
+    const client = new ProtoRigClient({ id: 'R2-001', api: apiFixture({ getErrors: async () => [error] }) })
+    await t.exception(client.getErrors(), /ERR_ERRORS_RESPONSE_INVALID/)
+    if (Object.hasOwn(error, 'error_code')) t.is((await client.getSnap()).stats.errors[0].name, 'firmware_error')
+  }
+})
+
+test('pools channel projects released pool fields and drops credentials and siblings', async (t) => {
+  const client = new ProtoRigClient({
+    id: 'R2-001',
+    api: apiFixture({
+      getPools: async () => [{
+        url: '  stratum2+tcp://pool:3336  ',
+        user: 'account.worker',
+        accepted: 10,
+        rejected: 2,
+        stale: 3,
+        status: 'Active',
+        id: 0,
+        priority: 1,
+        name: '',
+        protocol: 'Stratum V2',
+        password: 'secret',
+        v2_authority_pubkey: 'authority-secret',
+        invalid: 5,
+        arbitrary: 'secret'
+      }]
+    })
+  })
+  t.alike(await client.getPools(), [{
+    url: 'stratum2+tcp://pool:3336',
+    username: 'account.worker',
+    accepted: 10,
+    rejected: 2,
+    stale: 3,
+    status: 'Active',
+    id: 0,
+    priority: 1,
+    name: '',
+    protocol: 'Stratum V2'
+  }])
+  const snap = await client.getSnap()
+  t.alike(snap.stats.pool_status, [{ pool: 'stratum2+tcp://pool:3336', accepted: 10, rejected: 2, stale: 3, status: 'Active' }])
+  t.alike(snap.config.pool_config, [{ url: 'stratum2+tcp://pool:3336', username: 'account.worker' }])
+})
+
+test('pools channel rejects unsafe URLs, counts, and optional field types', async (t) => {
+  const pool = { url: 'stratum+tcp://pool:3333', accepted: 10, rejected: 1 }
+  for (const change of [
+    { url: 'stratum+tcp://worker:secret@pool:3333' }, { url: '' }, { url: 'pool:3333' },
+    { accepted: -1 }, { rejected: 0.5 }, { stale: '2' }, { stale: Infinity },
+    { id: -1 }, { id: Number.MAX_SAFE_INTEGER + 1 }, { priority: 0.5 },
+    { user: 3 }, { status: false }, { name: {} }, { protocol: null }
+  ]) {
+    const client = new ProtoRigClient({ id: 'R2-001', api: apiFixture({ getPools: async () => [{ ...pool, ...change }] }) })
+    await t.exception(client.getPools(), /ERR_POOLS_RESPONSE_INVALID/)
+    if (['id', 'priority', 'name', 'protocol'].some(key => Object.hasOwn(change, key))) {
+      t.is((await client.getSnap()).stats.pool_status[0].accepted, 10)
+    }
+  }
+})
+
+test('hashboards channel exposes measured board metrics only', async (t) => {
+  const client = new ProtoRigClient({
+    id: 'R2-001',
+    api: apiFixture({
+      getTelemetry: async () => ({
+        hashboards: [{
+          index: 0,
+          serial_number: 'HB001',
+          temperature: { unit: '°C', inlet: -5, outlet: 68, average: 56 },
+          hashrate: { unit: 'TH/s', value: 47.5 },
+          power: { unit: 'W', value: 1600 },
+          efficiency: { unit: 'J/TH', value: 33.68 },
+          voltage: { unit: 'V', value: 12 },
+          current: { unit: 'A', value: 133 },
+          asics: { temperature: [90] },
+          frequency: 500,
+          arbitrary: 'secret'
+        }]
+      })
+    })
+  })
+  t.alike(await client.getHashboards(), [{
+    index: 0,
+    serial_number: 'HB001',
+    temperature_c: { inlet: -5, outlet: 68, avg: 56 },
+    hashrate_ths: 47.5,
+    power_w: 1600,
+    efficiency_w_ths: 33.68,
+    voltage_v: 12,
+    current_a: 133
+  }])
+})
+
+test('hashboards channel rejects malformed measured fields and optional metrics', async (t) => {
+  const board = { index: 0, temperature: { unit: '°C', inlet: 45, outlet: 68, average: 56 } }
+  for (const change of [
+    { index: '0' }, { index: -1 }, { temperature: { unit: 'W', inlet: 45, outlet: 68, average: 56 } },
+    { temperature: { unit: '°C', inlet: 45, outlet: Infinity, average: 56 } }, { serial_number: 1 }
+  ]) {
+    const client = new ProtoRigClient({ id: 'R2-001', api: apiFixture({ getTelemetry: async () => ({ hashboards: [{ ...board, ...change }] }) }) })
+    await t.exception(client.getHashboards(), /ERR_TELEMETRY_RESPONSE_INVALID/)
+  }
+  for (const [field, unit] of [['hashrate', 'TH/s'], ['power', 'W'], ['efficiency', 'J/TH'], ['voltage', 'V'], ['current', 'A']]) {
+    for (const metric of [null, [], { value: 1 }, { unit: 'wrong', value: 1 }, { unit, value: -1 }, { unit, value: Infinity }, { unit, value: '1' }]) {
+      const telemetry = await apiFixture().getTelemetry()
+      telemetry.hashboards[0][field] = metric
+      const client = new ProtoRigClient({ id: 'R2-001', api: apiFixture({ getTelemetry: async () => telemetry }) })
+      await t.exception(client.getHashboards(), /ERR_TELEMETRY_RESPONSE_INVALID/)
+      t.is((await client.getSnap()).stats.temperature_c.max, 70, 'snapshot ignores newly exposed optional metrics')
+    }
+  }
+})
+
+test('device info projects identity and network without hardware or firmware siblings', async (t) => {
+  const client = new ProtoRigClient({
+    id: 'worker-device-id',
+    api: apiFixture({
+      getSystemInfo: async () => ({
+        'system-info': {
+          product_name: 'Proto Rig',
+          manufacturer: 'Proto',
+          model: 'R2',
+          cb_sn: 'CONTROL001',
+          os: { version: '1.8.2', status: { secret: true } },
+          board: { secret: true },
+          sw_update_status: { message: 'secret' }
+        }
+      }),
+      getNetworkInformation: async () => ({
+        'network-info': {
+          dhcp: false,
+          ip: '192.0.2.10',
+          gateway: '192.0.2.1',
+          netmask: '255.255.255.0',
+          mac: '82:11:D2:94:0D:6D',
+          hostname: 'proto-rig',
+          password: 'secret'
+        }
+      })
+    })
+  })
+  t.alike(await client.getDeviceInfo(), {
+    device_id: 'worker-device-id',
+    product_name: 'Proto Rig',
+    manufacturer: 'Proto',
+    model: 'R2',
+    serial_number: 'CONTROL001',
+    network: { mode: 'static', ip_address: '192.0.2.10', ip_gw: '192.0.2.1', ip_netmask: '255.255.255.0', mac: '82:11:D2:94:0D:6D', hostname: 'proto-rig' }
+  })
+})
+
+test('device info validates required network and optional identity types without tightening snapshot', async (t) => {
+  for (const [source, change, error] of [
+    ['system', { product_name: 1 }, /ERR_SYSTEM_RESPONSE_INVALID/],
+    ['system', { model: null }, /ERR_SYSTEM_RESPONSE_INVALID/],
+    ['system', { cb_sn: {} }, /ERR_SYSTEM_RESPONSE_INVALID/],
+    ['system', { manufacturer: false }, /ERR_SYSTEM_RESPONSE_INVALID/],
+    ['network', { dhcp: 'true' }, /ERR_NETWORK_RESPONSE_INVALID/],
+    ['network', { ip: '' }, /ERR_NETWORK_RESPONSE_INVALID/],
+    ['network', { gateway: null }, /ERR_NETWORK_RESPONSE_INVALID/],
+    ['network', { netmask: 1 }, /ERR_NETWORK_RESPONSE_INVALID/],
+    ['network', { mac: [] }, /ERR_NETWORK_RESPONSE_INVALID/],
+    ['network', { hostname: 1 }, /ERR_NETWORK_RESPONSE_INVALID/]
+  ]) {
+    const system = await apiFixture().getSystemInfo()
+    const network = await apiFixture().getNetworkInformation()
+    Object.assign(source === 'system' ? system['system-info'] : network['network-info'], change)
+    const client = new ProtoRigClient({ id: 'R2-001', api: apiFixture({ getSystemInfo: async () => system, getNetworkInformation: async () => network }) })
+    await t.exception(client.getDeviceInfo(), error)
+    if (['manufacturer', 'mac', 'hostname'].some(key => Object.hasOwn(change, key))) t.is((await client.getSnap()).config.model, 'R2')
+  }
+})
+
+test('firmware info projects only declared component strings', async (t) => {
+  const client = new ProtoRigClient({
+    id: 'R2-001',
+    api: apiFixture({
+      getSystemInfo: async () => ({
+        'system-info': {
+          os: { name: 'Proto Linux', version: '1.8.2', git_hash: 'abcdef', variant: 'release', build_datetime_utc: '20261013T120000Z', machine: 'c3', status: { secret: true } },
+          mining_driver_sw: { name: 'driver', version: '1.8.2', arbitrary: 'secret' },
+          pool_interface_sw: { name: 'pool', version: '2' },
+          web_server: { name: 'server', version: '3' },
+          web_dashboard: { name: 'dashboard', version: '4' },
+          hashboard_firmware: { name: 'board', version: '5' },
+          sw_update_status: { message: 'secret' },
+          api_version: 'fabricated',
+          cb_sn: 'secret'
+        }
+      })
+    })
+  })
+  t.alike(await client.getFirmwareInfo(), {
+    os: { name: 'Proto Linux', version: '1.8.2', git_hash: 'abcdef', variant: 'release', build_datetime_utc: '20261013T120000Z', machine: 'c3' },
+    mining_driver_sw: { name: 'driver', version: '1.8.2' },
+    pool_interface_sw: { name: 'pool', version: '2' },
+    web_server: { name: 'server', version: '3' },
+    web_dashboard: { name: 'dashboard', version: '4' },
+    hashboard_firmware: { name: 'board', version: '5' }
+  })
+  t.is((await client.getSnap()).config.firmware_ver, '1.8.2')
+})
+
+test('firmware info rejects malformed present components and leaves without tightening snapshot', async (t) => {
+  const components = ['os', 'mining_driver_sw', 'pool_interface_sw', 'web_server', 'web_dashboard', 'hashboard_firmware']
+  for (const component of components) {
+    const fields = component === 'os' ? ['name', 'version', 'git_hash', 'variant', 'build_datetime_utc', 'machine'] : ['name', 'version']
+    for (const value of [null, [], 'invalid', ...fields.map(field => ({ [field]: 1 }))]) {
+      const client = new ProtoRigClient({ id: 'R2-001', api: apiFixture({ getSystemInfo: async () => ({ 'system-info': { [component]: value } }) }) })
+      await t.exception(client.getFirmwareInfo(), /ERR_SYSTEM_RESPONSE_INVALID/)
+      if (component !== 'os' || (value && !Array.isArray(value) && typeof value === 'object' && value.version === undefined)) {
+        t.is((await client.getSnap()).config.firmware_ver, undefined, 'snapshot ignores newly exposed firmware fields')
+      }
+    }
+  }
+})
+
+test('detail channels preserve empty collections and absent optional readings', async (t) => {
+  const client = new ProtoRigClient({
+    id: 'R2-001',
+    api: apiFixture({
+      getErrors: async () => [],
+      getPools: async () => [],
+      getTelemetry: async () => ({ hashboards: [] }),
+      getSystemInfo: async () => ({ 'system-info': {} })
+    })
+  })
+  t.alike(await client.getErrors(), [])
+  t.alike(await client.getPools(), [])
+  t.alike(await client.getHashboards(), [])
+  t.alike(await client.getFirmwareInfo(), {})
+  t.alike(await client.getDeviceInfo(), { device_id: 'R2-001', network: { mode: 'dhcp', ip_address: '192.0.2.10', ip_gw: '192.0.2.1', ip_netmask: '255.255.255.0' } })
+
+  const minimal = new ProtoRigClient({ id: 'R2-001', api: apiFixture() })
+  t.alike(await minimal.getPools(), [{ url: 'stratum+tcp://pool:3333', username: 'worker', accepted: 10, rejected: 1, stale: 0, status: 'Active' }])
+  t.alike(await minimal.getHashboards(), [
+    { index: 0, temperature_c: { inlet: 45, outlet: 68, avg: 56 } },
+    { index: 1, temperature_c: { inlet: 46, outlet: 70, avg: 58 } }
+  ])
+  const partial = new ProtoRigClient({ id: 'R2-001', api: apiFixture({ getSystemInfo: async () => ({ 'system-info': { os: {}, web_server: { name: '' } } }) }) })
+  t.alike(await partial.getFirmwareInfo(), { os: {}, web_server: { name: '' } })
+  const missingPoolOptions = new ProtoRigClient({ id: 'R2-001', api: apiFixture({ getPools: async () => [{ url: 'stratum+tcp://pool:3333', accepted: 0, rejected: 0 }] }) })
+  t.alike(await missingPoolOptions.getPools(), [{ url: 'stratum+tcp://pool:3333', accepted: 0, rejected: 0, stale: 0 }])
+})
+
+test('detail getters reject malformed source collections and required envelopes', async (t) => {
+  for (const [method, apiMethod, values, error] of [
+    ['getErrors', 'getErrors', [null, {}, [null], [[]]], /ERR_ERRORS_RESPONSE_INVALID/],
+    ['getPools', 'getPools', [null, {}, [null], [[]]], /ERR_POOLS_RESPONSE_INVALID/],
+    ['getHashboards', 'getTelemetry', [null, {}, { hashboards: {} }, { hashboards: [null] }], /ERR_TELEMETRY_RESPONSE_INVALID/],
+    ['getDeviceInfo', 'getSystemInfo', [null, {}, { 'system-info': [] }], /ERR_SYSTEM_RESPONSE_INVALID/],
+    ['getDeviceInfo', 'getNetworkInformation', [null, {}, { 'network-info': [] }], /ERR_NETWORK_RESPONSE_INVALID/],
+    ['getFirmwareInfo', 'getSystemInfo', [null, {}, { 'system-info': [] }], /ERR_SYSTEM_RESPONSE_INVALID/]
+  ]) {
+    for (const value of values) {
+      const client = new ProtoRigClient({ id: 'R2-001', api: apiFixture({ [apiMethod]: async () => value }) })
+      await t.exception(client[method](), error)
+    }
+  }
+})
+
+test('detail getters query only their own available sources', async (t) => {
+  const cases = [
+    ['getErrors', ['getErrors']], ['getPools', ['getPools']], ['getHashboards', ['getTelemetry']],
+    ['getDeviceInfo', ['getSystemInfo', 'getNetworkInformation']], ['getFirmwareInfo', ['getSystemInfo']]
+  ]
+  for (const [method, allowed] of cases) {
+    const fixture = apiFixture()
+    const calls = []
+    const api = Object.fromEntries(Object.entries(fixture).map(([key, load]) => [key, async (...args) => {
+      calls.push(key)
+      if (!allowed.includes(key)) throw new Error('unrelated source down')
+      return load(...args)
+    }]))
+    const client = new ProtoRigClient({ id: 'R2-001', api })
+    await client[method]()
+    t.alike(calls.sort(), allowed.slice().sort(), method)
+  }
+})
+
+test('detail getters share caches with scalar and snapshot reads and honor writes', async (t) => {
+  const fixture = apiFixture({ setPools: async () => {}, stopMining: async () => {}, reboot: async () => {} })
+  const calls = {}
+  const api = Object.fromEntries(Object.entries(fixture).map(([key, load]) => [key, async (...args) => {
+    calls[key] = (calls[key] || 0) + 1
+    return load(...args)
+  }]))
+  const client = new ProtoRigClient({ id: 'R2-001', api, cacheMs: 5000 })
+  await Promise.all([
+    client.getErrors(), client.getPools(), client.getHashboards(), client.getDeviceInfo(), client.getFirmwareInfo(),
+    client.getPower(), client.getStatus(), client.getAcceptedShares(), client.getSnap()
+  ])
+  for (const key of ['getErrors', 'getPools', 'getTelemetry', 'getSystemInfo', 'getNetworkInformation']) t.is(calls[key], 1, key)
+  await client.getFirmwareInfo()
+  t.is(calls.getSystemInfo, 1, 'sequential reads reuse the same cache')
+  await client.setupPools([{ url: 'stratum+tcp://pool:3333', worker_name: 'worker' }])
+  await Promise.all([client.getPools(), client.getErrors(), client.getHashboards()])
+  t.is(calls.getPools, 2)
+  t.is(calls.getErrors, 2)
+  t.is(calls.getTelemetry, 1)
+  await client.setPowerMode('sleep')
+  await Promise.all([client.getHashboards(), client.getErrors(), client.getDeviceInfo()])
+  t.is(calls.getTelemetry, 2)
+  t.is(calls.getErrors, 3)
+  t.is(calls.getSystemInfo, 1)
+  await client.reboot()
+  await Promise.all([client.getDeviceInfo(), client.getFirmwareInfo()])
+  t.is(calls.getSystemInfo, 2)
+  t.is(calls.getNetworkInformation, 2)
+})
+
+test('detail caches stay local to each device and public projections do not mutate cached payloads', async (t) => {
+  let firstCalls = 0
+  let secondCalls = 0
+  const firstPayload = [{ url: 'stratum+tcp://pool:3333', user: 'first', accepted: 1, rejected: 0 }]
+  const first = new ProtoRigClient({ id: 'first', api: apiFixture({ getPools: async () => { firstCalls++; return firstPayload } }), cacheMs: 5000 })
+  const second = new ProtoRigClient({ id: 'second', api: apiFixture({ getPools: async () => { secondCalls++; return [{ ...firstPayload[0], user: 'second', accepted: 2 }] } }), cacheMs: 5000 })
+  const pools = await first.getPools()
+  pools[0].accepted = 999
+  t.is((await first.getPools())[0].accepted, 1)
+  t.is((await second.getPools())[0].accepted, 2)
+  t.is(firstPayload[0].user, 'first')
+  t.is(firstCalls, 1)
+  t.is(secondCalls, 1)
+})
