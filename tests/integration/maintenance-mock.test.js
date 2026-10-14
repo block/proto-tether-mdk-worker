@@ -99,7 +99,7 @@ test('default mock history is readable through the real client for every support
     port,
     accessToken: 'mock-access-1'
   }))
-  const client = new ProtoRigClient({ id: 'mock-rig', api })
+  const client = new ProtoRigClient({ id: 'mock-rig', api, cacheMs: 0 })
 
   for (const duration of ['1h', '12h', '24h', '48h', '5d']) {
     t.alike(await client.getHashrateHistory({ duration }), {
@@ -111,6 +111,14 @@ test('default mock history is readable through the real client for every support
       ],
       aggregates: { min: 94, avg: 95, max: 96 }
     })
+  }
+  mock.state.hashrateHistory = { data: [], aggregates: { min: null, avg: null, max: null } }
+  for (const duration of ['1h', '12h', '24h', '48h', '5d']) {
+    t.alike(await client.getHashrateHistory({ duration }), {
+      duration,
+      data: [],
+      aggregates: { min: null, avg: null, max: null }
+    }, 'startup history remains readable through the real HTTP adapter')
   }
 })
 

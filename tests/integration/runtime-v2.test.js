@@ -381,6 +381,10 @@ test('remaining diagnostics support runtime discovery, query parameters and inde
     second.state.hashrateHistory = { data: [] }
     t.alike((await pull('hashrate_history', {}, 'diag-2')).value, { duration: '1h', data: [] }, 'optional history aggregates stay absent through the HTTP adapter')
     t.alike((await pull('metrics', {}, 'diag-2')).metrics.hashrate_history, { duration: '1h', data: [] }, 'aggregate telemetry accepts omitted history aggregates too')
+    second.state.hashrateHistory.aggregates = { min: null, avg: null, max: null }
+    const emptyHistory = { duration: '1h', data: [], aggregates: { min: null, avg: null, max: null } }
+    t.alike((await pull('hashrate_history', {}, 'diag-2')).value, emptyHistory, 'startup history preserves null aggregates in direct telemetry')
+    t.alike((await pull('metrics', {}, 'diag-2')).metrics.hashrate_history, emptyHistory, 'startup history preserves null aggregates in aggregate telemetry')
     second.state.hashrateHistory.data = [{ datetime: 'invalid', value: 1 }]
     t.is((await pull('hashrate_history', {}, 'diag-2')).error, 'ERR_HASHRATE_RESPONSE_INVALID')
     second.state.pools = [{ url: 'stratum+tcp://user:secret@pool:3333', accepted: 0, rejected: 0 }]

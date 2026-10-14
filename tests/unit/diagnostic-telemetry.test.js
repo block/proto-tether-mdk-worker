@@ -145,6 +145,10 @@ test('hashrate history preserves source values null gaps and declared aggregates
   t.is((await client.getHashrateHistory()).data[0].value, 95.5)
   t.alike(await clientFor({ getHashrateHistory: async duration => ({ 'hashrate-data': { duration, data: [] } }) }).getHashrateHistory({ duration: '5d' }), { duration: '5d', data: [] })
   t.alike(await clientFor({ getHashrateHistory: async duration => ({ 'hashrate-data': { duration, data: [], aggregates: {} } }) }).getHashrateHistory(), { duration: '1h', data: [], aggregates: {} })
+  for (const data of [[], [{ datetime: 1704067200, value: null }]]) {
+    const history = { duration: '1h', data, aggregates: { min: null, avg: null, max: null } }
+    t.alike(await clientFor({ getHashrateHistory: async () => ({ 'hashrate-data': history }) }).getHashrateHistory(), history, 'unavailable history aggregates preserve null readings')
+  }
 })
 
 test('hashrate history validates duration before I/O and malformed source values', async (t) => {
@@ -158,7 +162,7 @@ test('hashrate history validates duration before I/O and malformed source values
     { duration: '1h', data: {} }, { duration: '1h', data: [null] }, { duration: '1h', data: [[]] }]
   for (const datetime of [undefined, null, '1', -1, 0.5, Number.MAX_SAFE_INTEGER + 1]) changes.push({ duration: '1h', data: [{ datetime, value: 1 }] })
   for (const value of [undefined, '1', -1, Infinity, NaN]) changes.push({ duration: '1h', data: [{ datetime: 1, value }] })
-  for (const aggregates of [null, [], { min: null }, { min: -1 }, { avg: '1' }, { max: Infinity }]) changes.push({ duration: '1h', data: [], aggregates })
+  for (const aggregates of [null, [], { min: '1' }, { min: -1 }, { min: Infinity }, { avg: '1' }, { max: Infinity }]) changes.push({ duration: '1h', data: [], aggregates })
   for (const data of changes) {
     await t.exception(clientFor({ getHashrateHistory: async () => ({ 'hashrate-data': data }) }).getHashrateHistory(), /ERR_HASHRATE_RESPONSE_INVALID/)
   }
