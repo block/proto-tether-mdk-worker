@@ -43,7 +43,7 @@ test('pool url prefers Active then first configured and shares validated credent
   const api = { getPools: async () => [pool('stratum+tcp://first:3333', 'Alive'), pool('  stratum2+tcp://active:3336  ', 'Active')] }
   t.is(await clientFor(api).getPoolUrl(), 'stratum2+tcp://active:3336')
   t.is(await clientFor({ getPools: async () => [pool('stratum+tcp://first:3333', 'Dead'), pool('stratum+tcp://second:3333', 'Alive')] }).getPoolUrl(), 'stratum+tcp://first:3333')
-  t.is(await clientFor({ getPools: async () => [] }).getPoolUrl(), null)
+  t.is(await clientFor({ getPools: async () => [] }).getPoolUrl(), '')
   for (const url of ['stratum+tcp://user:secret@pool:3333', '', 'pool:3333']) {
     await t.exception(clientFor({ getPools: async () => [pool(url, 'Active')] }).getPoolUrl(), /ERR_POOLS_RESPONSE_INVALID/)
   }

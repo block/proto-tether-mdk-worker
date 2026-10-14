@@ -38,12 +38,14 @@ test('diagnostic reads return validated raw envelopes and documented query defau
     '/hardware/psus', '/hashrate?duration=1h', '/system/logs?source=miner_sw&lines=100',
     '/hashrate?duration=5d', '/system/logs?source=miner_web_server&lines=10000'
   ])
+  const optional = { 'hashrate-data': { duration: '1h', data: [] } }
+  t.alike(await new ApiV1({ request: async () => optional }).getHashrateHistory(), optional, 'history aggregates may be absent')
 })
 
 test('diagnostic reads reject malformed successful responses', async (t) => {
   const cases = [
     ['getPowerSupplies', [null, {}, { 'psus-info': {} }, { 'psus-info': [null] }], 'ERR_PSUS_RESPONSE_INVALID'],
-    ['getHashrateHistory', [null, {}, { 'hashrate-data': [] }, { 'hashrate-data': { duration: '1h', data: [null], aggregates: {} } }], 'ERR_HASHRATE_RESPONSE_INVALID'],
+    ['getHashrateHistory', [null, {}, { 'hashrate-data': [] }, { 'hashrate-data': { duration: '1h', data: [null], aggregates: {} } }, { 'hashrate-data': { duration: '1h', data: [], aggregates: null } }, { 'hashrate-data': { duration: '1h', data: [], aggregates: [] } }], 'ERR_HASHRATE_RESPONSE_INVALID'],
     ['getLogs', [null, {}, { logs: [] }, { logs: { ...logs.logs, content: [1] } }, { logs: { ...logs.logs, lines: '2' } }], 'ERR_LOGS_RESPONSE_INVALID']
   ]
   for (const [method, payloads, message] of cases) {

@@ -13,7 +13,10 @@ module.exports = {
         setPowerMode: { mode: 'normal' },
         setPowerTarget: { watts: 2800 },
         setupPools: { pools: [{ url: 'stratum+tcp://pool.example:3333', worker_name: 'worker', worker_password: 'x' }] },
-        reboot: {}
+        reboot: {},
+        downloadLogs: { source: 'miner_sw', lines: 10 },
+        setNetwork: { network: { dhcp: true, hostname: 'smoke-rig' } },
+        updateFirmware: {}
       },
       teardown: () => mock.close()
     }

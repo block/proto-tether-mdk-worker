@@ -52,6 +52,21 @@ test('network writes validate the exact Proto configuration and invalidate inven
   t.is(failed.reads.has('network'), false, 'ambiguous network writes clear prior state')
 })
 
+test('log redaction consumes quoted credentials, escaped quotes and unterminated values', async (t) => {
+  const cases = [
+    ['password="FAKE words, punctuation; and spaces"', 'password=[REDACTED]'],
+    ["worker_password='FAKE words; and punctuation'", 'worker_password=[REDACTED]'],
+    [String.raw`{"access_token":"FAKE escaped \" quote, tail"}`, '{"access_token":[REDACTED]}'],
+    [String.raw`api_key='FAKE escaped \' quote; tail'`, 'api_key=[REDACTED]'],
+    ['refresh-token="FAKE unterminated tail', 'refresh-token=[REDACTED]'],
+    ['password="FAKE trailing slash' + String.fromCharCode(92), 'password=[REDACTED]'],
+    ['password="" other=ok', 'password=[REDACTED] other=ok'],
+    ['password="FAKE one" api_key=FAKE-two', 'password=[REDACTED] api_key=[REDACTED]']
+  ]
+  const device = client({ getLogs: async () => ({ logs: { source: 'miner_sw', lines: cases.length, content: cases.map(([line]) => line) } }) })
+  t.alike((await device.downloadLogs()).content, cases.map(([, expected]) => expected))
+})
+
 test('firmware update distinguishes acceptance from installation and invalidates all reads', async (t) => {
   const ota = client({ startFirmwareUpdate: async () => ({ status: 202, data: null }) })
   ota.reads.set('psus', {})

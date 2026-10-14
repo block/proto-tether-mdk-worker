@@ -51,6 +51,9 @@ The worker exposes these telemetry values from `mdk-contract.json`:
 | `device_info` | `` | object | Device identity and non-secret network configuration. |
 | `firmware_info` | `` | object | OS version/build metadata and reported software component versions. |
 | `psu_info` | `` | object | Power supply inventory, firmware versions, electrical readings, and temperatures. |
+| `fans` | `` | array | Individual measured fan RPM with optional slot and percentage. |
+| `pool_url` | `` | string | Active pool URL, falling back to the first configured pool; an empty string if none. |
+| `hashrate_history` | `` | object | Firmware history for `1h` (default), `12h`, `24h`, `48h`, or `5d`. |
 
 Query these channels with `telemetry.pull`, addressing a device and setting `payload.query.type` to the channel name, for example `{ "query": { "type": "errors" } }`. They are also included in aggregate `metrics`. Each uses only its own source endpoints; a failed mining-statistics or power-target read does not prevent querying device or firmware information. HTTP failures remain errors, rather than being reported as empty data. Missing optional fields are omitted in wire JSON.
 
@@ -63,7 +66,11 @@ Query these channels with `telemetry.pull`, addressing a device and setting `pay
 | `firmware_info` | Optional `os` object with `name`, `version`, `git_hash`, `variant`, `build_datetime_utc`, and `machine`; optional `mining_driver_sw`, `pool_interface_sw`, `web_server`, `web_dashboard`, and `hashboard_firmware` objects with `name` and `version`. Present leaves must be strings. OS runtime status and free-form update messages are omitted. |
 | `psu_info` | `{ psus: [...] }`, with optional per-supply `serial_number`, `slot`, `manufacturer`, `model`, `vendor`, `hw_revision`, `firmware: { app_version?, bootloader_version? }`, `power: { input_voltage_v?, output_voltage_v?, input_current_a?, output_current_a?, input_power_w?, output_power_w? }`, and `temperatures: [{ type?, temperature_c? }]`. Electrical readings are converted from firmware milliunits to volts, amps, and watts. Missing fields stay absent; no reported supplies returns `{ psus: [] }`. Credentials, free-form messages, update status, and undeclared fields are omitted. Malformed responses report `ERR_PSUS_RESPONSE_INVALID`. |
 
-These additions provide the diagnostic channel names exposed by the [Antminer contract](https://github.com/bitmain-official/antminer-mdk-worker/blob/4fd776b4a048a1bc8284ec2eceed82b4631f960c/mdk-contract.json) and [WhatsMiner contract](https://github.com/whatsminer/whatsminer-mdk-worker/blob/a47fa82020454f9bfa9963ccaaa319b7948e8aa2/mdk-contract.json), using fields reported by [Proto public API v1](https://block.github.io/proto-fleet/proto-api-docs/). They do not add system logs, firmware updates, network writes, extra performance modes, or ASIC-level diagnostics. The existing `snap` response and its field validation remain unchanged.
+`fans` returns `[{ rpm, slot?, percentage? }]`, with percentage from 0 through 100. `pool_url` prefers a pool whose status is `Active`, then the first configured pool, and rejects URLs containing userinfo. Both channels share their source caches with existing cooling/pool reads.
+
+Query history with `{ "query": { "type": "hashrate_history", "duration": "12h" } }`. Only `duration` is accepted as a history parameter. The result is `{ duration, data: [{ datetime, value }], aggregates?: { min?, avg?, max? } }`, where `datetime` is Unix seconds and null values preserve missing samples. Hashrate values keep the firmware's original units because the history API declares no unit; the worker does not infer TH/s or synthesize time windows. Aggregate `metrics` includes the default `1h` history unless a duration is supplied. History caches are separate per device and duration. Invalid durations report `ERR_HASHRATE_DURATION_INVALID`; malformed responses report `ERR_HASHRATE_RESPONSE_INVALID`.
+
+These additions provide the diagnostic channel names exposed by the [Antminer contract](https://github.com/bitmain-official/antminer-mdk-worker/blob/4fd776b4a048a1bc8284ec2eceed82b4631f960c/mdk-contract.json) and [WhatsMiner contract](https://github.com/whatsminer/whatsminer-mdk-worker/blob/a47fa82020454f9bfa9963ccaaa319b7948e8aa2/mdk-contract.json), using fields reported by [Proto public API v1](https://block.github.io/proto-fleet/proto-api-docs/). The existing `snap` response and its field validation remain unchanged. No extra performance modes or ASIC-level diagnostics are synthesized.
 
 `status` uses MDK status values. Mining maps to `mining`. Stopped and Curtailed map to `sleeping`. PoweringOff maps to `not_mining`. Active device errors map to `error`. Other non-mining startup states map to `not_mining`. A documented `204 No mining statistics` response is handled as the `Uninitialized` startup state; a power-target read in that state reports `ERR_MINING_STATISTICS_UNAVAILABLE`.
 
@@ -75,7 +82,7 @@ These additions provide the diagnostic channel names exposed by the [Antminer co
 
 ## Commands
 
-Commands call public API v1 write endpoints. They return serializable MDK command results through `WorkerRuntimeV2`.
+Commands call public API v1 endpoints and return serializable MDK command results through `WorkerRuntimeV2`. `downloadLogs` is a read; the other commands change device state. Address the device and send `{ "commandId": "unique-id", "command": "setNetwork", "params": { "network": { "dhcp": true } } }` in a `command.request` payload. Named parameters are preferred; the runtime also maps positional `value`/`args` inputs using the contract's parameter order.
 
 | Command | Parameters | Effect |
 | --- | --- | --- |
@@ -84,6 +91,15 @@ Commands call public API v1 write endpoints. They return serializable MDK comman
 | `setPowerTarget` | `watts`: number from `1` through `12000` | The published R2 contract rejects values above its model-wide ceiling. The handler rounds to the exact transmitted integer, then checks finite positive safe-integer device bounds before writing. Missing, malformed, unsafe, or inverted bounds fail closed. |
 | `setLED` | `enabled`: boolean | Turns the control-board locate LED on or off for physical identification. |
 | `setupPools` | `pools`: one to three entries, `appendId`: optional boolean | Replaces configured mining pools. The worker appends `deviceId` to each worker name unless `appendId` is `false`. |
+| `downloadLogs` | `source`: optional `os`, `pool_sw`, `miner_sw` (default), or `miner_web_server`; `lines`: optional integer `1`–`10000` (default `100`) | Returns `{ source, lines, content }`, counting actual returned lines. Known configured/current device credentials, bearer tokens, and recognized credential fields are redacted. Free-form logs still need review before sharing. |
+| `setNetwork` | `network`: `{ dhcp, ip?, netmask?, gateway?, hostname? }` | Applies DHCP or static IPv4 settings and returns `{ success: true }` on a successful HTTP response. The rig may move to another address or disconnect. |
+| `updateFirmware` | `firmware`: optional `{ filename, encoding: "base64", size, sha256, data }`; omit for OTA | OTA sends a bodyless POST; upload sends the decoded `.swu` bytes as multipart form data. Returns `{ accepted: true, completed: false, mode: "ota"\|"upload" }`. This confirms acceptance, not successful installation. |
+
+For `setNetwork`, `dhcp` is required and boolean. Static mode requires IPv4 `ip` and contiguous IPv4 `netmask`, with optional IPv4 `gateway`. DHCP mode rejects those three fields. An optional `hostname` must be a single DNS label of 1–63 letters, digits, or internal hyphens. Unknown fields are rejected before I/O with `ERR_NETWORK_CONFIG_INVALID`. Preserve the previous settings and verify the rig's reachability independently after changing them.
+
+For firmware upload, `filename` must be a basename ending in `.swu`. `size` is an integer byte count from `1` through `536870912` (512 MiB), `sha256` is 64 hexadecimal characters, and `data` must be canonical base64 with matching decoded size and hash. Invalid images fail before device I/O with `ERR_FIRMWARE_PAYLOAD_INVALID`. Base64 increases message size by roughly one third; the host, Kernel, and transport may impose smaller limits. The upload HTTP timeout is 30 minutes, so callers must allow sufficient time and avoid automatic retries. Firmware credentials are renewed before sending when a password or refresh token is configured; access-token-only configurations use their existing token. Update writes never replay after a `401`, timeout, or disconnect. Concurrent updates on one device fail with `ERR_COMMAND_IN_PROGRESS`. The guard is process-local and does not deduplicate commands across restarts. Verify firmware state after any ambiguous outcome before issuing another update.
+
+OTA acceptance requires HTTP `202`; upload acceptance requires HTTP `200`. Other successful status codes report `ERR_FIRMWARE_RESPONSE_INVALID` and require device verification before another attempt. Log parameter/response validation uses `ERR_LOGS_PARAMETERS_INVALID` and `ERR_LOGS_RESPONSE_INVALID`.
 
 Each pool entry uses:
 
@@ -102,11 +118,11 @@ The reboot cooldown is process-local and resets when a new device instance is cr
 
 ## Failure semantics
 
-The HTTP client authenticates initially with a configured access token or by logging in with the device password. A refresh token is renewal material, not a standalone initial credential. Any authenticated request, including a write, may replay once only after an explicit HTTP 401 and successful token renewal. This is the sole retry path. Login and refresh `401` or `403` responses are reported as authentication failures; server failures retain their HTTP status and do not trigger a password fallback.
+The HTTP client authenticates initially with a configured access token or by logging in with the device password. A refresh token is renewal material, not a standalone initial credential. Authenticated requests other than firmware updates, including other writes, may replay once only after an explicit HTTP 401 and successful token renewal. This is the sole retry path. Firmware updates renew credentials before sending when renewal material is available and disable that replay. Login and refresh `401` or `403` responses are reported as authentication failures; server failures retain their HTTP status and do not trigger a password fallback.
 
 The worker's HTTP client does not retry non-401 HTTP responses, connection errors, request timeouts, malformed JSON, malformed successful responses, or any other ambiguous outcome. A timeout or disconnect during a write has an unknown physical outcome. The Kernel's transport retry and WAL recovery are separate from this HTTP policy; configure orchestration to avoid replaying ambiguous physical commands across worker restarts. Read current device state before sending another write.
 
-Before and in `finally` after each attempted write, the worker invalidates affected reads: all reads for `reboot`; mining/telemetry/errors for `setPowerMode`; target/mining/telemetry for `setPowerTarget`; and pools/mining/errors for `setupPools`. `setLED` has no exposed read key. This ensures post-failure verification reaches firmware rather than stale cache.
+Before and in `finally` after each attempted write, the worker invalidates affected reads: all reads for `reboot` and `updateFirmware`; mining/telemetry/errors for `setPowerMode`; target/mining/telemetry for `setPowerTarget`; pools/mining/errors for `setupPools`; and network/system for `setNetwork`. `setLED` has no exposed read key. This ensures post-failure verification reaches firmware rather than stale cache.
 
 The worker reports stable contract-declared `ERR_*` messages and redacts credentials and response data from errors. Malformed 2xx read payloads use endpoint response-validation errors. Treat `ERR_DEVICE_CONNECTION`, `ERR_HTTP_RESPONSE`, `ERR_REQUEST_TIMEOUT`, and `ERR_RESPONSE_INVALID_JSON` during a write as ambiguous hardware outcomes.
 
