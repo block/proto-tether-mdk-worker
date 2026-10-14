@@ -57,6 +57,64 @@ test('telemetry methods normalize public API values', async (t) => {
   t.is(await client.getFanSpeed(), 5050)
 })
 
+test('reboot enforces a five-minute cooldown per device', async (t) => {
+  const originalNow = Date.now
+  let now = 0
+  Date.now = () => now
+  t.teardown(() => { Date.now = originalNow })
+
+  let writes = 0
+  const api = apiFixture({ reboot: async () => { writes++; return { rebooting: true } } })
+  const first = new ProtoRigClient({ id: 'R2-001', api })
+  const second = new ProtoRigClient({ id: 'R2-002', api })
+
+  t.alike(await first.reboot(), { rebooting: true, success: true })
+  await t.exception(first.reboot(), /ERR_COMMAND_COOLDOWN/)
+  await second.reboot()
+  t.is(writes, 2, 'another device has its own cooldown')
+  now = 299999
+  await t.exception(first.reboot(), /ERR_COMMAND_COOLDOWN/)
+  t.is(writes, 2, 'rejected attempts never reach firmware')
+  now = 300000
+  await first.reboot()
+  t.is(writes, 3, 'the next reboot is allowed at five minutes')
+})
+
+test('an in-flight or failed reboot cannot trigger another write', async (t) => {
+  const originalNow = Date.now
+  let now = 0
+  Date.now = () => now
+  t.teardown(() => { Date.now = originalNow })
+
+  let rejectWrite
+  let writes = 0
+  const client = new ProtoRigClient({
+    id: 'R2-001',
+    api: apiFixture({
+      reboot: () => {
+        writes++
+        return new Promise((resolve, reject) => { rejectWrite = reject })
+      }
+    })
+  })
+  const pending = client.reboot()
+  const failure = t.exception(pending, /ERR_REQUEST_TIMEOUT/)
+  await t.exception(client.reboot(), /ERR_COMMAND_IN_PROGRESS/)
+  t.is(writes, 1, 'an in-flight reboot stays exclusive')
+  rejectWrite(new Error('ERR_REQUEST_TIMEOUT'))
+  await failure
+
+  now = 299999
+  await t.exception(client.reboot(), /ERR_COMMAND_COOLDOWN/)
+  t.is(writes, 1, 'an ambiguous failure still consumes the cooldown')
+  now = 300000
+  const next = client.reboot()
+  const nextFailure = t.exception(next, /ERR_DEVICE_CONNECTION/)
+  t.is(writes, 2, 'the in-flight guard is released after failure')
+  rejectWrite(new Error('ERR_DEVICE_CONNECTION'))
+  await nextFailure
+})
+
 test('scalar getters reject malformed successful values with stable errors', async (t) => {
   const cases = [
     ['getHashrateAvg', { getTelemetry: async () => ({ miner: { hashrate: { value: '95.5', unit: 'TH/s' } } }) }, /ERR_TELEMETRY_RESPONSE_INVALID/],

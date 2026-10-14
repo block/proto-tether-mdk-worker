@@ -26,7 +26,7 @@
       {
         "name": "reboot",
         "description": "Restarts the R2 Rig controller.",
-        "constraints": "Do not call more than once per 5 minutes. Do not retry after an unknown network outcome.",
+        "constraints": "A five-minute per-device cooldown is enforced after every attempt, including failures with unknown physical outcomes. Concurrent reboots are rejected. Do not retry after an unknown network outcome.",
         "handler": "src/commands/reboot.js",
         "params": []
       },
@@ -59,8 +59,8 @@
       },
       {
         "name": "setupPools",
-        "description": "Replaces the configured mining pools with one to three entries.",
-        "constraints": "The pools parameter must be an array containing one to three entries. Preserve the previous configuration before changing mining destinations. Do not retry after an unknown network outcome.",
+        "description": "Replaces the configured mining pools with one to three entries. Required entry fields are non-empty url and worker_name strings; optional entry fields are worker_password and pool strings.",
+        "constraints": "The pools parameter must be an array containing one to three entries. URLs must include a hostname and omit userinfo. worker_password defaults to \"\" and pool defaults to \"\". appendId defaults to true and appends .<deviceId> to worker_name; false uses the bare worker name. Example pools: [{\"url\":\"stratum+tcp://pool.example:3333\",\"worker_name\":\"account.worker\"}]. Preserve the previous configuration before changing mining destinations. Do not retry after an unknown network outcome.",
         "handler": "src/commands/setup-pools.js",
         "params": [
           { "name": "pools", "type": "object", "required": true },
@@ -80,6 +80,8 @@
     },
     "errors": {
       "ERR_DEVICE_ID_REQUIRED": "The Tether MDK device ID is missing.",
+      "ERR_COMMAND_COOLDOWN": "A reboot was attempted within five minutes of the previous attempt, including an ambiguous failed attempt.",
+      "ERR_COMMAND_IN_PROGRESS": "A reboot is already running for this device.",
       "ERR_DEVICE_ADDRESS_REQUIRED": "The device address is missing.",
       "ERR_DEVICE_ADDRESS_INVALID": "The device address must be a non-empty host-only string without userinfo, a port, path, query, or fragment.",
       "ERR_DEVICE_CREDENTIALS_REQUIRED": "The device password or access token is missing.",

@@ -4,6 +4,8 @@
 
 Configure each device in `WorkerRuntimeV2` with a `deviceId` and a `config` object.
 
+The bundled host in `host/index.js` exposes `startProtoWorker({ workerId, devices, storeDir, trustedKernelKeys, kernelTopic, ...runtimeOptions })`, returning `{ runtime, stop }`. `storeDir` is required and holds the runtime's persistent identity seeds. `trustedKernelKeys` is a required non-empty array of 64-character hex strings or 32-byte Buffers representing allowed Kernel outbound DHT transport keys. An MDK Kernel's RPC server key is a different identity; use `kernel.hrpcListener.getDht().defaultKeyPair.publicKey` after starting Kernel. Only those transport peers can reach any RPC handler, regardless of the envelope's sender name. `stop()` is idempotent. Set `MDK_REPO` to a checkout, or supply the installed `@tetherto/mdk` monorepo. See [Host the worker](README.md#host-the-worker) for installation, environment settings, and Kernel registration. The worker runtime package is not yet published separately.
+
 Device options:
 
 | Option | Required | Description |
@@ -11,7 +13,7 @@ Device options:
 | `address` | Yes | Non-empty host-only string for the Proto Rig public API v1 endpoint. Userinfo, ports, paths, queries, and fragments are rejected; configure the port separately. |
 | `port` | No | HTTP port. Defaults to `80`. |
 | `protocol` | No | `http` or `https`. Defaults to `http` to match the public API, which means credentials and tokens travel in cleartext. `https` requires a rig with a verifiable certificate or a custom `fetchImpl`; see [Transport security](README.md#transport-security). |
-| `fetchImpl` | No | Fetch-compatible function supplied programmatically in device config. Defaults to `globalThis.fetch`. Use a custom implementation only to apply an explicit TLS trust and hostname policy. |
+| `fetchImpl` | No | Fetch-compatible function supplied programmatically in device config. Defaults to `globalThis.fetch`. Custom implementations must honor `redirect: 'error'` and the abort signal. Use a custom implementation only to apply an explicit TLS trust and hostname policy. |
 | `timeout` | No | Request timeout in whole milliseconds from `1` through `2147483647`. Defaults to `10000`. |
 | `password` | Conditional | Device password. Use secret management. Required when `accessToken` is absent. Supports initial login and renewal after a rejected access token. |
 | `accessToken` | Conditional | Existing bearer access token. Use secret management. Required when `password` is absent. Without a password or refresh token, an explicit `401` ends authentication. |
@@ -58,7 +60,7 @@ Commands call public API v1 write endpoints. They return serializable MDK comman
 
 | Command | Parameters | Effect |
 | --- | --- | --- |
-| `reboot` | none | Restarts the R2 Rig controller. Do not call more than once per 5 minutes. |
+| `reboot` | none | Restarts the R2 Rig controller. Enforces a five-minute cooldown per device after every attempt, including ambiguous failures. Rejects an in-flight reboot with `ERR_COMMAND_IN_PROGRESS` and an attempt during cooldown with `ERR_COMMAND_COOLDOWN`. |
 | `setPowerMode` | `mode`: `normal` or `sleep` | Starts mining for `normal` or stops mining for `sleep`. |
 | `setPowerTarget` | `watts`: number from `1` through `12000` | The published R2 contract rejects values above its model-wide ceiling. The handler rounds to the exact transmitted integer, then checks finite positive safe-integer device bounds before writing. Missing, malformed, unsafe, or inverted bounds fail closed. |
 | `setLED` | `enabled`: boolean | Turns the control-board locate LED on or off for physical identification. |
@@ -77,11 +79,13 @@ Each pool entry uses:
 
 Preserve the previous pool configuration before changing mining destinations. Verify cooling and device limits before increasing power.
 
+The reboot cooldown is process-local and resets when a new device instance is created after host restart. The Kernel may automatically retry a command after a timeout or transport error, and its WAL recovery can re-queue dispatched or executing commands after a shared-process restart. An attempt that reached the rig before restart can therefore be sent again to a fresh worker within five minutes. Preserve operator awareness of recent hardware operations across restarts; the runtime's identity seed storage does not persist the cooldown or provide durable command deduplication.
+
 ## Failure semantics
 
 The HTTP client authenticates initially with a configured access token or by logging in with the device password. A refresh token is renewal material, not a standalone initial credential. Any authenticated request, including a write, may replay once only after an explicit HTTP 401 and successful token renewal. This is the sole retry path. Login and refresh `401` or `403` responses are reported as authentication failures; server failures retain their HTTP status and do not trigger a password fallback.
 
-The worker does not retry non-401 HTTP responses, connection errors, request timeouts, malformed JSON, malformed successful responses, or any other ambiguous outcome. A timeout or disconnect during a write has an unknown physical outcome and must not trigger an automatic retry. Read current device state before sending another write.
+The worker's HTTP client does not retry non-401 HTTP responses, connection errors, request timeouts, malformed JSON, malformed successful responses, or any other ambiguous outcome. A timeout or disconnect during a write has an unknown physical outcome. The Kernel's transport retry and WAL recovery are separate from this HTTP policy; configure orchestration to avoid replaying ambiguous physical commands across worker restarts. Read current device state before sending another write.
 
 Before and in `finally` after each attempted write, the worker invalidates affected reads: all reads for `reboot`; mining/telemetry/errors for `setPowerMode`; target/mining/telemetry for `setPowerTarget`; and pools/mining/errors for `setupPools`. `setLED` has no exposed read key. This ensures post-failure verification reaches firmware rather than stale cache.
 
