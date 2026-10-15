@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Proto control plane</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <header>
+      <a class="brand" href="/" aria-label="Proto control plane home"
+        ><span class="mark">P</span
+        ><span>PROTO<span class="brand-sub">CONTROL PLANE</span></span></a
+      >
+      <div class="connection">
+        <span id="connection-dot" class="dot"></span
+        ><span id="connection">Connecting to MDK…</span
+        ><button id="reconnect" class="quiet">Reconnect</button>
+      </div>
+    </header>
+    <main>
+      <section class="intro">
+        <div>
+          <p class="eyebrow">LOCAL WORKER CONSOLE</p>
+          <h1>Inspect. Command. Verify.</h1>
+          <p class="muted">
+            Every published capability, connected through your MDK gateway.
+          </p>
+        </div>
+        <div class="device">
+          <span class="muted">TARGET DEVICE</span
+          ><strong id="device-id">—</strong
+          ><span id="gateway-url" class="muted"></span>
+        </div>
+      </section>
+      <section
+        id="summary"
+        class="summary"
+        aria-label="Current rig readings"
+      ></section>
+      <p id="global-error" class="error" role="alert" hidden></p>
+      <nav class="tabs" aria-label="Console sections">
+        <button class="active" data-view="telemetry">
+          Telemetry <span id="telemetry-count">0</span></button
+        ><button data-view="commands">
+          Commands <span id="command-count">0</span></button
+        ><button data-view="activity">
+          Activity <span id="activity-count">0</span></button
+        ><button data-view="contract">Contract</button>
+      </nav>
+      <section id="telemetry-view" class="workspace">
+        <aside>
+          <label class="search-label" for="telemetry-search">CHANNELS</label
+          ><input
+            id="telemetry-search"
+            type="search"
+            placeholder="Find a channel…"
+          />
+          <div id="telemetry-list" class="capability-list"></div>
+        </aside>
+        <article>
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">TELEMETRY</p>
+              <h2 id="channel-title">Select a channel</h2>
+            </div>
+            <button id="read-channel" class="primary" disabled>
+              Read telemetry ↗
+            </button>
+          </div>
+          <p id="channel-description" class="muted"></p>
+          <div class="result-toolbar">
+            <span id="read-status" aria-live="polite"
+              >Readings are fetched on demand.</span
+            ><label
+              ><input id="raw-toggle" type="checkbox" /> Raw response</label
+            >
+          </div>
+          <div id="telemetry-output" class="output">
+            <p class="empty">
+              Choose a channel to inspect its current reading.
+            </p>
+          </div>
+        </article>
+      </section>
+      <section id="commands-view" class="workspace" hidden>
+        <aside>
+          <label class="search-label" for="command-search">COMMANDS</label
+          ><input
+            id="command-search"
+            type="search"
+            placeholder="Find a command…"
+          />
+          <div id="command-list" class="capability-list"></div>
+        </aside>
+        <article>
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">COMMAND</p>
+              <h2 id="command-title">Select a command</h2>
+            </div>
+            <span class="badge">LIVE DEVICE</span>
+          </div>
+          <p id="command-description" class="muted"></p>
+          <details class="constraints">
+            <summary>Contract constraints</summary>
+            <p id="command-constraints"></p>
+          </details>
+          <form id="command-form">
+            <div id="parameter-fields" class="parameter-fields"></div>
+            <p id="form-error" class="error" role="alert" hidden></p>
+            <div class="form-footer">
+              <span class="muted"
+                >Commands execute once. Nothing is sent until you confirm.</span
+              ><button class="primary" id="review-command" disabled>
+                Review command ↗
+              </button>
+            </div>
+          </form>
+          <section class="command-result">
+            <h3>Last result</h3>
+            <p id="command-status" aria-live="polite" class="muted">
+              No command sent in this session.
+            </p>
+            <pre id="command-output" hidden></pre>
+          </section>
+        </article>
+      </section>
+      <section id="activity-view" class="wide-panel" hidden>
+        <h2>Session activity</h2>
+        <p class="muted">
+          The latest 30 requests and results from this tab. Sensitive parameters
+          are redacted; nothing is saved to browser storage.
+        </p>
+        <div id="activity-list">
+          <p class="empty">Your reads and commands will appear here.</p>
+        </div>
+      </section>
+      <section id="contract-view" class="wide-panel" hidden>
+        <div class="panel-heading">
+          <h2>Published worker contract</h2>
+          <button id="refresh-contract">Refresh contract</button>
+        </div>
+        <p class="muted">
+          Forms and channel lists are generated from this live contract.
+        </p>
+        <pre id="contract-output"></pre>
+        <h3>Worker status</h3>
+        <button id="read-workers">Read worker status</button>
+        <pre id="workers-output"></pre>
+      </section>
+      <footer>
+        <span>PROTO / MDK</span
+        ><span
+          >Loopback only · On-demand reads · No automatic command retries</span
+        >
+      </footer>
+    </main>
+    <dialog id="confirm-dialog">
+      <form method="dialog">
+        <p class="eyebrow">REVIEW REQUEST</p>
+        <h2 id="confirm-title">Send command?</h2>
+        <p id="confirm-target" class="muted"></p>
+        <pre id="confirm-payload"></pre>
+        <p class="muted">
+          This sends a command to the connected rig. Check its current state and
+          the contract constraints before proceeding.
+        </p>
+        <div class="dialog-actions">
+          <button value="cancel">Cancel</button
+          ><button id="confirm-send" value="send" class="primary">
+            Send command
+          </button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>

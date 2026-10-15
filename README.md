@@ -115,6 +115,15 @@ Register the runtime's public key with an existing Kernel using `await kernel.re
 
 Use this bundled host for network access to rigs. It adapts MDK transport startup to install a peer firewall before listening; instantiating upstream `WorkerRuntimeV2` directly does not enforce this allowlist. The adapter retains the inherited dispatch and device lifecycle, and CI verifies it against the supported runtime matrix.
 
+## Local control plane
+
+With an MDK gateway running, use `npm run control` and open
+<http://127.0.0.1:3041> to inspect every published telemetry channel and exercise
+commands through generated forms. Defaults target `proto-rig-1` through the
+gateway at `http://127.0.0.1:3007`. Commands require a request preview and explicit
+confirmation. See the [control plane guide](tools/control-plane/README.md) for
+configuration, request history, and firmware upload limits.
+
 ## Test
 
 The contract and integration tests load MDK core from a checkout of

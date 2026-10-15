@@ -1,0 +1,50 @@
+'use strict'
+
+const test = require('brittle')
+const http = require('node:http')
+const { createControlPlane } = require('../../tools/control-plane/server')
+
+test('local control plane serves its UI and forwards MDK reads and commands without replay', async t => {
+  t.exception(() => createControlPlane({ gateway: 'http://remote.example:3007' }), /loopback/)
+  t.exception(() => createControlPlane({ gateway: 'http://user:secret@localhost:3007' }), /credentials/)
+  const seen = []
+  const gateway = http.createServer(async (req, res) => {
+    let body = ''
+    for await (const chunk of req) body += chunk
+    seen.push({ method: req.method, path: req.url, body: body ? JSON.parse(body) : null })
+    res.setHeader('content-type', 'application/json')
+    res.end(JSON.stringify(req.method === 'POST' ? { status: 'FAILED', error: 'ERR_COMMAND_IN_PROGRESS' } : { value: 123 }))
+  })
+  await new Promise(resolve => gateway.listen(0, '127.0.0.1', resolve))
+  const server = createControlPlane({ gateway: `http://127.0.0.1:${gateway.address().port}`, deviceId: 'proto-rig-1' })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.teardown(async () => {
+    await Promise.all([server, gateway].map(server => new Promise(resolve => server.close(resolve))))
+  })
+  const base = `http://127.0.0.1:${server.address().port}`
+  const page = await fetch(base)
+  t.is(page.status, 200)
+  t.ok((await page.text()).includes('Proto control plane'))
+  await fetch(`${base}/api/telemetry/asic_stats`)
+  t.is(seen.at(-1).path, '/site/devices/proto-rig-1/telemetry/asic_stats')
+  await fetch(`${base}/api/capabilities`)
+  t.is(seen.at(-1).path, '/site/capabilities')
+  const body = { command: 'setPerformanceMode', params: { mode: 'Efficiency' } }
+  const command = await fetch(`${base}/api/command`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify(body) })
+  t.is((await command.json()).status, 'FAILED', 'MDK failure is preserved even with HTTP 200')
+  t.alike(seen.at(-1), { method: 'POST', path: '/site/miners/proto-rig-1/command', body })
+  t.is(seen.filter(request => request.method === 'POST').length, 1, 'writes are sent once')
+  const before = seen.length
+  const rejectedHost = await new Promise((resolve, reject) => {
+    http.get(`${base}/api/capabilities`, { headers: { host: 'another.example' } }, response => {
+      response.resume()
+      resolve(response.statusCode)
+    }).on('error', reject)
+  })
+  t.is(rejectedHost, 403)
+  t.is((await fetch(`${base}/api/command`, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://another.example' }, body: JSON.stringify(body) })).status, 403)
+  t.is((await fetch(`${base}/api/command`, { method: 'POST', headers: { 'content-type': 'application/json', 'sec-fetch-site': 'cross-site' }, body: JSON.stringify(body) })).status, 403)
+  t.is((await fetch(`${base}/api/command`, { method: 'POST', headers: { 'content-type': 'text/plain' }, body: JSON.stringify(body) })).status, 415)
+  t.is((await fetch(`${base}/api/unknown`)).status, 404)
+  t.is(seen.length, before, 'invalid routes and cross-origin writes never reach the gateway')
+})
