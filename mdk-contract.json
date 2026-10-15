@@ -61,6 +61,20 @@
         ]
       },
       {
+        "name": "setPowerPreset",
+        "description": "Sets the mining watt target to the device-reported minimum or maximum, preserving the performance policy.",
+        "constraints": "preset is min or max. Bounds are read fresh for each command and must be positive safe integers within the R2 ceiling of 12000 W. Does not start or stop mining. Verify cooling before selecting max. Do not retry after an unknown network outcome.",
+        "handler": "src/commands/set-power-preset.js",
+        "params": [{ "name": "preset", "type": "string", "required": true, "enum": ["min", "max"] }]
+      },
+      {
+        "name": "setPerformanceMode",
+        "description": "Selects Proto's native performance policy. MaximumHashrate maximizes hashrate at the configured watt target; Efficiency optimizes J/TH at or below that target.",
+        "constraints": "mode is MaximumHashrate or Efficiency. Updates only performance_mode; the watt target and other target settings are preserved. Does not start or stop mining. Changing policy can change power consumption and heat. Do not retry after an unknown network outcome.",
+        "handler": "src/commands/set-performance-mode.js",
+        "params": [{ "name": "mode", "type": "string", "required": true, "enum": ["MaximumHashrate", "Efficiency"] }]
+      },
+      {
         "name": "setLED",
         "description": "Turns the control-board locate LED on or off.",
         "constraints": "Use only for physical identification. Do not retry after an unknown network outcome.",
@@ -153,6 +167,8 @@
       "ERR_FIRMWARE_PAYLOAD_INVALID": "The firmware upload needs a safe .swu filename, canonical base64, matching size and SHA256.",
       "ERR_FIRMWARE_RESPONSE_INVALID": "Firmware OTA must return HTTP 202 and firmware upload must return HTTP 200; verify the device before another attempt.",
       "ERR_POWER_TARGET_INVALID": "The power target must normalize to a positive safe integer.",
+      "ERR_POWER_PRESET_INVALID": "The power preset must be min or max.",
+      "ERR_PERFORMANCE_MODE_INVALID": "The performance mode must be MaximumHashrate or Efficiency.",
       "ERR_POWER_TARGET_OUT_OF_RANGE": "The power target is outside the bounds reported by the device.",
       "ERR_SET_POWER_MODE_INVALID": "The power mode must be normal or sleep.",
       "ERR_SET_LED_ENABLED_INVALID": "The LED value must be boolean.",

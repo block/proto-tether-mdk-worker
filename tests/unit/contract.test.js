@@ -11,7 +11,7 @@ const WORKER_DIR = path.resolve(__dirname, '../..')
 test('contract loads every V2 handler and strips private paths', async (t) => {
   const loaded = loadContract(WORKER_DIR)
   t.is(loaded.entries.telemetry.size, 22)
-  t.is(loaded.entries.commands.size, 8)
+  t.is(loaded.entries.commands.size, 10)
   t.is(loaded.contract.metadata.provider, 'proto')
   t.ok(loaded.entries.telemetry.has('health'))
   t.is(loaded.entries.telemetry.has('hashrate_history'), false, 'miner history is retired')
@@ -24,13 +24,21 @@ test('contract loads every V2 handler and strips private paths', async (t) => {
     t.is(loaded.publishedContract.capabilities.telemetry.find(entry => entry.name === name)?.type, type, `${name} has a discoverable result type`)
   }
 
-  for (const name of ['downloadLogs', 'setNetwork', 'updateFirmware']) {
+  for (const name of ['downloadLogs', 'setNetwork', 'updateFirmware', 'setPowerPreset', 'setPerformanceMode']) {
     t.ok(loaded.entries.commands.has(name), `contract loads ${name}`)
   }
 
   const setPowerTarget = loaded.publishedContract.capabilities.commands.find(command => command.name === 'setPowerTarget')
   const watts = setPowerTarget.params.find(param => param.name === 'watts')
   t.alike({ min: watts.min, max: watts.max }, { min: 1, max: 12000 })
+
+  for (const [name, parameter, values] of [
+    ['setPowerPreset', 'preset', ['min', 'max']],
+    ['setPerformanceMode', 'mode', ['MaximumHashrate', 'Efficiency']]
+  ]) {
+    const command = loaded.publishedContract.capabilities.commands.find(entry => entry.name === name)
+    t.alike(command.params, [{ name: parameter, type: 'string', required: true, enum: values }])
+  }
 
   const setupPools = loaded.publishedContract.capabilities.commands.find(command => command.name === 'setupPools')
   const poolHelp = `${setupPools.description} ${setupPools.constraints}`
@@ -72,6 +80,8 @@ test('contract loads every V2 handler and strips private paths', async (t) => {
     'ERR_MINING_RESPONSE_INVALID',
     'ERR_MINING_STATISTICS_UNAVAILABLE',
     'ERR_POWER_TARGET_RESPONSE_INVALID',
+    'ERR_POWER_PRESET_INVALID',
+    'ERR_PERFORMANCE_MODE_INVALID',
     'ERR_TELEMETRY_RESPONSE_INVALID',
     'ERR_COOLING_RESPONSE_INVALID',
     'ERR_PSUS_RESPONSE_INVALID',
