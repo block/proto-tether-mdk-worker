@@ -54,11 +54,25 @@
       {
         "name": "setPowerTarget",
         "description": "Sets the R2 Rig mining power target in watts.",
-        "constraints": "Use a value within the device-reported minimum and maximum bounds. Verify cooling before increasing power. Do not retry after an unknown network outcome.",
+        "constraints": "Use a value within the device-reported minimum and maximum bounds. Concurrent target commands on one device are rejected with ERR_COMMAND_IN_PROGRESS. The echoed watts and known preserved settings must match; ERR_POWER_TARGET_WRITE_UNVERIFIED requires reading current device state. Verify cooling before increasing power. Do not retry after an unknown outcome.",
         "handler": "src/commands/set-power-target.js",
         "params": [
           { "name": "watts", "type": "number", "required": true, "min": 1, "max": 12000 }
         ]
+      },
+      {
+        "name": "setPowerPreset",
+        "description": "Sets the mining watt target to the device-reported minimum or maximum, preserving the performance policy.",
+        "constraints": "preset is min or max. Bounds are read fresh for each command and must be positive safe integers within the R2 ceiling of 12000 W. Concurrent target commands on one device are rejected with ERR_COMMAND_IN_PROGRESS, including during the bounds read. The echoed watts and known preserved settings must match; ERR_POWER_TARGET_WRITE_UNVERIFIED requires reading current device state. Does not start or stop mining. Verify cooling before selecting max. Do not retry after an unknown outcome.",
+        "handler": "src/commands/set-power-preset.js",
+        "params": [{ "name": "preset", "type": "string", "required": true, "enum": ["min", "max"] }]
+      },
+      {
+        "name": "setPerformanceMode",
+        "description": "Selects Proto's native performance policy. MaximumHashrate maximizes hashrate at the configured watt target; Efficiency optimizes J/TH at or below that target.",
+        "constraints": "mode is MaximumHashrate or Efficiency. Updates only performance_mode; the watt target and other target settings are preserved. Concurrent target commands on one device are rejected with ERR_COMMAND_IN_PROGRESS. The echoed performance_mode must match; ERR_POWER_TARGET_WRITE_UNVERIFIED requires reading current device state. Does not start or stop mining. Changing policy can change power consumption and heat. Do not retry after an unknown outcome.",
+        "handler": "src/commands/set-performance-mode.js",
+        "params": [{ "name": "mode", "type": "string", "required": true, "enum": ["MaximumHashrate", "Efficiency"] }]
       },
       {
         "name": "setLED",
@@ -117,7 +131,7 @@
     "errors": {
       "ERR_DEVICE_ID_REQUIRED": "The Tether MDK device ID is missing.",
       "ERR_COMMAND_COOLDOWN": "A reboot was attempted within five minutes of the previous attempt, including an ambiguous failed attempt.",
-      "ERR_COMMAND_IN_PROGRESS": "A reboot is already running for this device.",
+      "ERR_COMMAND_IN_PROGRESS": "A conflicting command is already running on this device.",
       "ERR_DEVICE_ADDRESS_REQUIRED": "The device address is missing.",
       "ERR_DEVICE_ADDRESS_INVALID": "The device address must be a non-empty host-only string without userinfo, a port, path, query, or fragment.",
       "ERR_DEVICE_CREDENTIALS_REQUIRED": "The device password or access token is missing.",
@@ -140,6 +154,7 @@
       "ERR_MINING_RESPONSE_INVALID": "The firmware mining response was malformed.",
       "ERR_MINING_STATISTICS_UNAVAILABLE": "The firmware has not produced mining statistics yet.",
       "ERR_POWER_TARGET_RESPONSE_INVALID": "The firmware power-target response or safety bounds were malformed or unsafe.",
+      "ERR_POWER_TARGET_WRITE_UNVERIFIED": "The firmware target write returned a missing or contradictory target. The physical outcome is uncertain; read current device state before another write and do not retry automatically.",
       "ERR_TELEMETRY_RESPONSE_INVALID": "The firmware telemetry response was malformed.",
       "ERR_COOLING_RESPONSE_INVALID": "The firmware cooling response was malformed.",
       "ERR_ERRORS_RESPONSE_INVALID": "The firmware errors response was malformed.",
@@ -153,6 +168,8 @@
       "ERR_FIRMWARE_PAYLOAD_INVALID": "The firmware upload needs a safe .swu filename, canonical base64, matching size and SHA256.",
       "ERR_FIRMWARE_RESPONSE_INVALID": "Firmware OTA must return HTTP 202 and firmware upload must return HTTP 200; verify the device before another attempt.",
       "ERR_POWER_TARGET_INVALID": "The power target must normalize to a positive safe integer.",
+      "ERR_POWER_PRESET_INVALID": "The power preset must be min or max.",
+      "ERR_PERFORMANCE_MODE_INVALID": "The performance mode must be MaximumHashrate or Efficiency.",
       "ERR_POWER_TARGET_OUT_OF_RANGE": "The power target is outside the bounds reported by the device.",
       "ERR_SET_POWER_MODE_INVALID": "The power mode must be normal or sleep.",
       "ERR_SET_LED_ENABLED_INVALID": "The LED value must be boolean.",

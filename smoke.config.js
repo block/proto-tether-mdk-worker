@@ -12,6 +12,8 @@ module.exports = {
         setLED: { enabled: true },
         setPowerMode: { mode: 'normal' },
         setPowerTarget: { watts: 2800 },
+        setPowerPreset: { preset: 'min' },
+        setPerformanceMode: { mode: 'Efficiency' },
         setupPools: { pools: [{ url: 'stratum+tcp://pool.example:3333', worker_name: 'worker', worker_password: 'x' }] },
         reboot: {},
         downloadLogs: { source: 'miner_sw', lines: 10 },

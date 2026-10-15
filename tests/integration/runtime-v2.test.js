@@ -202,6 +202,100 @@ test('WorkerRuntimeV2 keeps device state isolated and publishes clean envelopes'
   }
 })
 
+test('native performance policies and min/max power presets preserve independent settings', async (t) => {
+  const cleanup = createCleanupStack(t)
+  const first = createServer()
+  const second = createServer({ tokenSeq: 100 })
+  cleanup.add(() => first.close())
+  cleanup.add(() => second.close())
+  const [one, two] = await Promise.all([first.ready, second.ready])
+  Object.assign(first.state.target, { balance_bays: true, hash_on_disconnect: true })
+  const runtime = new WorkerRuntimeV2(WORKER_DIR, {
+    workerId: 'power-worker',
+    devices: [
+      { deviceId: 'power-1', config: { address: '127.0.0.1', port: one.port, password: 'test-password', cacheMs: 5000 } },
+      { deviceId: 'power-2', config: { address: '127.0.0.1', port: two.port, password: 'test-password', cacheMs: 5000 } }
+    ]
+  })
+  cleanup.add(() => runtime.stop())
+  try {
+    await runtime.start()
+    let id = 0
+    const command = async (name, params, deviceId = 'power-1') => (await runtime.handleRequest(request(ACTIONS.COMMAND_REQUEST, deviceId, {
+      commandId: `power-${++id}`, command: name, params
+    }))).payload
+    const snap = async () => (await runtime.handleRequest(request(ACTIONS.TELEMETRY_PULL, 'power-1', { query: { type: 'snap' } }))).payload.value
+    const initial = await snap()
+    t.is(initial.config.performance_mode, 'MaximumHashrate')
+    const efficiency = await command('setPerformanceMode', { mode: 'Efficiency' })
+    t.is(efficiency.status, 'SUCCESS')
+    t.is(efficiency.result.target.performance_mode, 'Efficiency')
+    t.is(first.state.target.power_target_watts, 3300)
+    t.is((await snap()).config.performance_mode, 'Efficiency', 'a warmed snapshot reads the new policy')
+    first.state.target.power_target_min_watts = 500
+    const minimum = await command('setPowerPreset', { preset: 'min' })
+    t.is(minimum.status, 'SUCCESS')
+    t.is(minimum.result.target.power_target_watts, 500, 'uses freshly reported bounds')
+    t.is((await snap()).config.power_target_watts, 500)
+    first.state.target.power_target_max_watts = 7000
+    t.is((await command('setPowerPreset', { value: 'max' })).result.target.power_target_watts, 7000, 'positional preset maps through the contract')
+    t.is((await command('setPerformanceMode', { args: ['MaximumHashrate'] })).status, 'SUCCESS')
+    t.is(first.state.target.performance_mode, 'MaximumHashrate')
+    t.is(first.state.target.power_target_watts, 7000)
+    t.is(first.state.target.balance_bays, true)
+    t.is(first.state.target.hash_on_disconnect, true)
+    t.is(first.state.mining.status, 'Mining', 'target controls do not start or stop mining')
+    t.is(second.state.target.power_target_watts, 3300, 'writes remain device-local')
+    const before = first.state.requests.length
+    t.is((await command('setPowerPreset', { preset: 'high' })).error, 'ERR_POWER_PRESET_INVALID')
+    t.is((await command('setPerformanceMode', { mode: 'efficiency' })).error, 'ERR_PERFORMANCE_MODE_INVALID')
+    t.is(first.state.requests.length, before, 'invalid parameters do not reach the device')
+    second.state.mining.status = 'Stopped'
+    t.is((await command('setPerformanceMode', { mode: 'Efficiency' }, 'power-2')).status, 'SUCCESS')
+    t.is(second.state.target.performance_mode, 'Efficiency')
+    t.is(second.state.mining.status, 'Stopped', 'policy changes do not start a stopped rig')
+    t.is(first.state.target.performance_mode, 'MaximumHashrate')
+  } finally {
+    await cleanup.cleanupAll()
+  }
+})
+
+test('target echo mismatches produce FAILED command results without retrying writes', async t => {
+  const cleanup = createCleanupStack(t)
+  const firmware = createServer()
+  cleanup.add(() => firmware.close())
+  const address = await firmware.ready
+  let target = firmware.state.target
+  Object.defineProperty(firmware.state, 'target', {
+    get: () => target,
+    set: updated => { target = { ...updated, performance_mode: 'MaximumHashrate' } }
+  })
+  const runtime = new WorkerRuntimeV2(WORKER_DIR, {
+    workerId: 'unverified-power-worker',
+    devices: [{ deviceId: 'power-1', config: { address: '127.0.0.1', port: address.port, password: 'test-password' } }]
+  })
+  cleanup.add(() => runtime.stop())
+  try {
+    await runtime.start()
+    for (const [command, params] of [
+      ['setPerformanceMode', { mode: 'Efficiency' }],
+      ['setPowerPreset', { preset: 'min' }]
+    ]) {
+      target.performance_mode = 'Efficiency'
+      const before = firmware.state.writeAttempts['/api/v1/mining/target'] || 0
+      const result = (await runtime.handleRequest(request(ACTIONS.COMMAND_REQUEST, 'power-1', {
+        commandId: command, command, params
+      }))).payload
+      t.is(result.status, 'FAILED')
+      t.is(result.error, 'ERR_POWER_TARGET_WRITE_UNVERIFIED')
+      t.is(firmware.state.writeAttempts['/api/v1/mining/target'], before + 1, 'the uncertain write is not replayed')
+    }
+    t.is(target.power_target_watts, target.power_target_min_watts, 'a failed verification does not undo the physical write')
+  } finally {
+    await cleanup.cleanupAll()
+  }
+})
+
 test('health derives safe device state without exposing failures', async (t) => {
   const cleanup = createCleanupStack(t)
   const statusByPath = {}

@@ -214,8 +214,15 @@ function route (req, res, state, url, pathname, body) {
   if (req.method === 'GET' && pathname === '/api/v1/mining') return sendJson(res, 200, { 'mining-status': state.mining })
   if (req.method === 'GET' && pathname === '/api/v1/mining/target') return sendJson(res, 200, state.target)
   if (req.method === 'PUT' && pathname === '/api/v1/mining/target') {
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length === 0 ||
+      Object.keys(body).some(key => !['power_target_watts', 'performance_mode'].includes(key))) throw mockError(400)
+    if (body.power_target_watts !== undefined && (!Number.isSafeInteger(body.power_target_watts) ||
+      body.power_target_watts < state.target.power_target_min_watts || body.power_target_watts > state.target.power_target_max_watts)) throw mockError(400)
+    if (body.performance_mode !== undefined && !['MaximumHashrate', 'Efficiency'].includes(body.performance_mode)) throw mockError(400)
     state.writeAttempts[pathname] = (state.writeAttempts[pathname] || 0) + 1
-    state.target = { ...state.target, power_target_watts: body.power_target_watts }
+    // Partial updates mirror the reference simulator and OpenAPI request shape;
+    // preservation on live firmware still needs verification.
+    state.target = { ...state.target, ...body }
     return sendJson(res, 200, state.target)
   }
   if (req.method === 'POST' && pathname === '/api/v1/mining/start') {
