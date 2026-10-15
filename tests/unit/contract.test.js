@@ -14,10 +14,11 @@ test('contract loads every V2 handler and strips private paths', async (t) => {
   t.is(loaded.entries.commands.size, 8)
   t.is(loaded.contract.metadata.provider, 'proto')
   t.ok(loaded.entries.telemetry.has('health'))
+  t.is(loaded.entries.telemetry.has('hashrate_history'), false, 'miner history is retired')
   for (const [name, type] of [
     ['errors', 'array'], ['pools', 'array'], ['hashboards', 'array'],
     ['device_info', 'object'], ['firmware_info', 'object'], ['psu_info', 'object'],
-    ['fans', 'array'], ['pool_url', 'string'], ['hashrate_history', 'object']
+    ['fans', 'array'], ['pool_url', 'string'], ['asic_stats', 'object']
   ]) {
     t.ok(loaded.entries.telemetry.has(name), `contract loads ${name}`)
     t.is(loaded.publishedContract.capabilities.telemetry.find(entry => entry.name === name)?.type, type, `${name} has a discoverable result type`)
@@ -74,8 +75,8 @@ test('contract loads every V2 handler and strips private paths', async (t) => {
     'ERR_TELEMETRY_RESPONSE_INVALID',
     'ERR_COOLING_RESPONSE_INVALID',
     'ERR_PSUS_RESPONSE_INVALID',
-    'ERR_HASHRATE_DURATION_INVALID',
-    'ERR_HASHRATE_RESPONSE_INVALID',
+    'ERR_ASIC_STATS_RESPONSE_INVALID',
+    'ERR_ASIC_STATS_UNAVAILABLE',
     'ERR_LOGS_PARAMETERS_INVALID',
     'ERR_LOGS_RESPONSE_INVALID',
     'ERR_NETWORK_CONFIG_INVALID',

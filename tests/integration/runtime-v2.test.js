@@ -324,7 +324,7 @@ test('psu_info is discoverable and reports isolated PSU reads and errors through
   }
 })
 
-test('remaining diagnostics support runtime discovery, query parameters and independent failures', async (t) => {
+test('current diagnostics support runtime discovery and independent failures', async (t) => {
   const cleanup = createCleanupStack(t)
   const statusByPath = { '/api/v1/mining': 503, '/api/v1/mining/target': 503 }
   const first = createServer({ statusByPath })
@@ -347,7 +347,7 @@ test('remaining diagnostics support runtime discovery, query parameters and inde
     await runtime.start()
     const capability = await runtime.handleRequest(request(ACTIONS.CAPABILITY_REQUEST, null))
     const channels = capability.payload.contract.capabilities.telemetry
-    for (const [name, type] of [['fans', 'array'], ['pool_url', 'string'], ['hashrate_history', 'object']]) {
+    for (const [name, type] of [['fans', 'array'], ['pool_url', 'string'], ['asic_stats', 'object']]) {
       t.is(channels.find(entry => entry.name === name)?.type, type, `${name} is discoverable`)
     }
     const pull = async (type, params = {}, deviceId = 'diag-1') => {
@@ -357,36 +357,47 @@ test('remaining diagnostics support runtime discovery, query parameters and inde
     const fans = await pull('fans')
     t.alike(fans.value, [{ rpm: 4500, slot: 3, percentage: 60 }])
     t.is((await pull('pool_url')).value, 'stratum+tcp://pool:3333')
-    for (const duration of ['1h', '12h', '24h', '48h', '5d']) {
-      const history = await pull('hashrate_history', { duration })
-      t.alike(history.value, {
-        duration,
-        data: [{ datetime: 1767225600, value: 94 }, { datetime: 1767225660, value: null }, { datetime: 1767225720, value: 96 }],
-        aggregates: { min: 94, avg: 95, max: 96 }
-      }, `runtime forwards the ${duration} query without inventing units`)
-    }
-    await pull('hashrate_history')
-    t.is(first.state.requests.filter(entry => entry.path === '/api/v1/hashrate').length, 5, 'default duration shares the 1h cache')
-    t.is(first.state.requests.some(entry => entry.path === '/api/v1/mining'), false, 'detail reads do not need mining status')
+    const asics = (await pull('asic_stats')).value
+    t.alike(asics.hashboards.map(board => [board.serial_number, board.slot, board.expected_asic_count, board.reported_asic_count]), [['HB001', 1, 2, 2], ['HB002', 2, 1, 1]])
+    t.alike(asics.hashboards[0].asics[0], {
+      index: 0,
+      id: 'A0',
+      row: 0,
+      column: 0,
+      frequency_mhz: 650,
+      temperature_c: 45.5,
+      voltage_v: 0.3085,
+      hashrate_ths: 0.3005,
+      ideal_hashrate_ths: 0.32,
+      error_rate_pct: 0.1
+    })
+    first.state.hashboardStats.HB001.asics[0].temp_c = 80
+    t.is((await pull('asic_stats')).value.hashboards[0].asics[0].temperature_c, 80, 'independent pulls always read current values despite cacheMs=5000')
+    const boardReads = first.state.requests.filter(entry => entry.path.startsWith('/api/v1/hashboards'))
+    t.is(boardReads.length, 6, 'each collection reads inventory and one status per board')
+    t.is(first.state.requests.some(entry => ['/api/v1/mining', '/api/v1/mining/target'].includes(entry.path)), false, 'detail reads do not collect a full snapshot')
     const before = first.state.requests.length
-    t.is((await pull('hashrate_history', { duration: '2h' })).error, 'ERR_HASHRATE_DURATION_INVALID')
-    t.is(first.state.requests.length, before, 'invalid durations are rejected before HTTP')
+    t.ok((await pull('hashrate_history')).error.startsWith('ERR_UNKNOWN_QUERY_TYPE'), 'retired channel is unavailable')
+    t.is(first.state.requests.length, before, 'retired history never reaches the miner')
     t.alike((await pull('fans', {}, 'diag-2')).value, [])
     t.is((await pull('pool_url', {}, 'diag-2')).value, '', 'no configured pool returns the declared string type')
     const metrics = (await pull('metrics')).metrics
     t.alike(metrics.fans, fans.value)
     t.is(metrics.pool_url, 'stratum+tcp://pool:3333')
-    t.is(metrics.hashrate_history?.duration, '1h')
+    t.is(metrics.asic_stats.hashboards[0].asics[0].temperature_c, 80)
+    t.is(Object.hasOwn(metrics, 'hashrate_history'), false)
+    t.is(first.state.requests.some(entry => entry.path === '/api/v1/hashrate'), false, 'aggregate metrics never fetch miner history')
     t.is(JSON.stringify(metrics).includes('DIAGNOSTIC-SECRET'), false)
-    second.state.hashrateHistory = { data: [] }
-    t.alike((await pull('hashrate_history', {}, 'diag-2')).value, { duration: '1h', data: [] }, 'optional history aggregates stay absent through the HTTP adapter')
-    t.alike((await pull('metrics', {}, 'diag-2')).metrics.hashrate_history, { duration: '1h', data: [] }, 'aggregate telemetry accepts omitted history aggregates too')
-    second.state.hashrateHistory.aggregates = { min: null, avg: null, max: null }
-    const emptyHistory = { duration: '1h', data: [], aggregates: { min: null, avg: null, max: null } }
-    t.alike((await pull('hashrate_history', {}, 'diag-2')).value, emptyHistory, 'startup history preserves null aggregates in direct telemetry')
-    t.alike((await pull('metrics', {}, 'diag-2')).metrics.hashrate_history, emptyHistory, 'startup history preserves null aggregates in aggregate telemetry')
-    second.state.hashrateHistory.data = [{ datetime: 'invalid', value: 1 }]
-    t.is((await pull('hashrate_history', {}, 'diag-2')).error, 'ERR_HASHRATE_RESPONSE_INVALID')
+    second.state.hashboardStats.HB001.asics[0].temp_c = null
+    const partial = (await pull('asic_stats', {}, 'diag-2')).value
+    t.is(partial.hashboards[0].error, 'ERR_ASIC_STATS_RESPONSE_INVALID')
+    t.is(partial.hashboards[0].asics, undefined, 'invalid readings are not published as zero')
+    t.is(partial.hashboards[1].asics[0].temperature_c, 45.5, 'other boards and devices stay independent')
+    statusByPath['/api/v1/hashboards/HB002'] = 503
+    const failed = (await pull('metrics')).metrics
+    t.is(failed.asic_stats.hashboards[1].error, 'ERR_ASIC_STATS_UNAVAILABLE')
+    t.is(failed.asic_stats.hashboards[0].asics[0].temperature_c, 80)
+    t.alike(failed.fans, fans.value, 'board failures do not break other channels')
     second.state.pools = [{ url: 'stratum+tcp://user:secret@pool:3333', accepted: 0, rejected: 0 }]
     t.is((await pull('pool_url', {}, 'diag-2')).error, 'ERR_POOLS_RESPONSE_INVALID')
     second.state.cooling.fans = [{ rpm: -1 }]

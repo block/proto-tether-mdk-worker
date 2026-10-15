@@ -30,9 +30,8 @@
       { "name": "fans", "unit": "", "type": "array", "handler": "src/telemetry/fans.js", "description": "Measured cooling fans as {rpm, slot?, percentage?}. Percentage is an integer from 0 through 100; absent metadata stays absent. An empty array means no reported fans. Undeclared fields are omitted." },
       { "name": "pool_url", "unit": "", "type": "string", "handler": "src/telemetry/pool-url.js", "description": "URL of the Active pool, falling back to the first configured pool. An empty string means no pools are configured. URLs with userinfo are rejected; pool passwords are never published." },
       {
-        "name": "hashrate_history", "unit": "", "type": "object", "handler": "src/telemetry/hashrate-history.js",
-        "description": "Firmware history as {duration, data: [{datetime, value}], aggregates?: {min?, avg?, max?}}. Datetime is Unix seconds; null values preserve gaps. Hashrate values retain firmware units because the history API declares no unit. Duration defaults to 1h. Cached separately per device and duration; no synthesized samples or windows.",
-        "params": [{ "name": "duration", "type": "string", "enum": ["1h", "12h", "24h", "48h", "5d"] }]
+        "name": "asic_stats", "unit": "", "type": "object", "handler": "src/telemetry/asic-stats.js",
+        "description": "Current ASIC diagnostics as {hashboards: [{serial_number, slot?, board_type?, asic_type?, expected_asic_count?, status?, reported_asic_count?, asics?: [{index, id?, row?, column?, frequency_mhz?, temperature_c?, voltage_v?, hashrate_ths?, ideal_hashrate_ths?, error_rate_pct?}], error?}]}. Missing readings stay absent; no inferred health or history. Failed boards carry a stable error with no readings. One inventory read plus one status read per board, at most two board reads concurrently. Only overlapping pulls are shared; completed readings are never cached. Included in aggregate metrics; existing snap is unchanged."
       }
     ],
     "commands": [
@@ -146,8 +145,8 @@
       "ERR_ERRORS_RESPONSE_INVALID": "The firmware errors response was malformed.",
       "ERR_POOLS_RESPONSE_INVALID": "The firmware pools response was malformed or contained an unsafe URL.",
       "ERR_PSUS_RESPONSE_INVALID": "The firmware power supply response was malformed.",
-      "ERR_HASHRATE_DURATION_INVALID": "History duration must be 1h, 12h, 24h, 48h or 5d, with no extra query parameters.",
-      "ERR_HASHRATE_RESPONSE_INVALID": "The firmware hashrate history response was malformed.",
+      "ERR_ASIC_STATS_RESPONSE_INVALID": "Hashboard inventory or ASIC statistics were malformed or had conflicting identities.",
+      "ERR_ASIC_STATS_UNAVAILABLE": "A hashboard status request failed. Other boards remain readable; missing readings are not replaced with zero.",
       "ERR_LOGS_PARAMETERS_INVALID": "Log source or line count is invalid.",
       "ERR_LOGS_RESPONSE_INVALID": "The firmware log response was malformed or inconsistent with the request.",
       "ERR_NETWORK_CONFIG_INVALID": "Network configuration must specify DHCP or valid static IPv4 settings and an optional hostname.",
