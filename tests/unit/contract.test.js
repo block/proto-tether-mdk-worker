@@ -80,6 +80,7 @@ test('contract loads every V2 handler and strips private paths', async (t) => {
     'ERR_MINING_RESPONSE_INVALID',
     'ERR_MINING_STATISTICS_UNAVAILABLE',
     'ERR_POWER_TARGET_RESPONSE_INVALID',
+    'ERR_POWER_TARGET_WRITE_UNVERIFIED',
     'ERR_POWER_PRESET_INVALID',
     'ERR_PERFORMANCE_MODE_INVALID',
     'ERR_TELEMETRY_RESPONSE_INVALID',
@@ -94,4 +95,23 @@ test('contract loads every V2 handler and strips private paths', async (t) => {
     'ERR_FIRMWARE_RESPONSE_INVALID',
     'ERR_APPEND_ID_INVALID'
   ]) t.ok(loaded.publishedContract.capabilities.errors[error], `contract declares ${error}`)
+})
+
+test('every published target-control enum value is accepted by its client handler', async t => {
+  const { publishedContract } = loadContract(WORKER_DIR)
+  const target = { power_target_watts: 3300, power_target_min_watts: 400, power_target_max_watts: 6000, performance_mode: 'MaximumHashrate' }
+  const client = new ProtoRigClient({
+    id: 'R2-001',
+    api: {
+      getMiningTarget: async () => ({ ...target }),
+      setPowerTarget: async watts => ({ ...target, power_target_watts: watts }),
+      setPerformanceMode: async mode => ({ ...target, performance_mode: mode })
+    }
+  })
+  for (const name of ['setPowerPreset', 'setPerformanceMode']) {
+    const command = publishedContract.capabilities.commands.find(command => command.name === name)
+    for (const value of command.params[0].enum) {
+      t.is((await client[name](value)).success, true, `${name} accepts advertised value ${value}`)
+    }
+  }
 })

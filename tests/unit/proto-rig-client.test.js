@@ -370,9 +370,9 @@ test('reboot delegates once and invalidates every read cache entry', async (t) =
 
 test('setPowerTarget normalizes the exact transmitted integer before checking bounds', async (t) => {
   const writes = []
-  const api = apiFixture({ setPowerTarget: async watts => { writes.push(watts); return { power_target_watts: watts } } })
+  const api = apiFixture({ setPowerTarget: async watts => { writes.push(watts); return { power_target_watts: watts, performance_mode: 'MaximumHashrate' } } })
   const client = new ProtoRigClient({ id: 'R2-001', api, cacheMs: 0 })
-  t.alike(await client.setPowerTarget(399.6), { success: true, target: { power_target_watts: 400 } })
+  t.alike(await client.setPowerTarget(399.6), { success: true, target: { power_target_watts: 400, performance_mode: 'MaximumHashrate' } })
   await t.exception(client.setPowerTarget(399.4), /ERR_POWER_TARGET_OUT_OF_RANGE: 400-6000/)
   t.alike(writes, [400])
 })
@@ -448,17 +448,36 @@ test('setPowerTarget rejects unsafe device bounds before writing', async (t) => 
   }
 })
 
-test('setPowerTarget invalidates target and mining telemetry around a successful write', async (t) => {
-  const api = apiFixture({ setPowerTarget: async watts => ({ power_target_watts: watts }) })
-  const client = new ProtoRigClient({ id: 'R2-001', api, cacheMs: 1000 })
-  for (const key of ['target', 'mining', 'telemetry', 'pools']) {
-    client.reads.set(key, { promise: Promise.resolve({}), expires: Date.now() + 1000 })
+test('all target commands invalidate affected reads before and after successful or uncertain writes', async (t) => {
+  const affected = ['target', 'mining', 'telemetry', 'asic-stats']
+  for (const [method, value, source] of [
+    ['setPowerTarget', 2800, 'setPowerTarget'],
+    ['setPowerPreset', 'min', 'setPowerTarget'],
+    ['setPerformanceMode', 'Efficiency', 'setPerformanceMode']
+  ]) {
+    for (const outcome of ['success', 'connection', 'unverified']) {
+      const target = await apiFixture().getMiningTarget()
+      let attempts = 0
+      const seed = key => client.reads.set(key, { promise: Promise.resolve({}), expires: Date.now() + 1000 })
+      const api = apiFixture({
+        [source]: async parameter => {
+          attempts++
+          for (const key of affected) t.is(client.reads.has(key), false, `${method} evicts ${key} before writing`)
+          for (const key of affected) seed(key)
+          if (outcome === 'connection') throw new Error('ERR_DEVICE_CONNECTION')
+          if (outcome === 'unverified') return null
+          return { ...target, ...(source === 'setPerformanceMode' ? { performance_mode: parameter } : { power_target_watts: parameter }) }
+        }
+      })
+      const client = new ProtoRigClient({ id: 'R2-001', api, cacheMs: 1000 })
+      for (const key of [...affected, 'pools']) seed(key)
+      if (outcome === 'success') t.is((await client[method](value)).success, true)
+      else await t.exception(client[method](value), outcome === 'connection' ? /ERR_DEVICE_CONNECTION/ : /ERR_POWER_TARGET_WRITE_UNVERIFIED/)
+      t.is(attempts, 1)
+      for (const key of affected) t.is(client.reads.has(key), false, `${method} evicts repopulated ${key} after ${outcome}`)
+      t.is(client.reads.has('pools'), true, 'unaffected reads stay cached')
+    }
   }
-  t.alike(await client.setPowerTarget(2800), { success: true, target: { power_target_watts: 2800 } })
-  t.is(client.reads.has('target'), false)
-  t.is(client.reads.has('mining'), false)
-  t.is(client.reads.has('telemetry'), false)
-  t.is(client.reads.has('pools'), true)
 })
 
 test('reads after rejected writes bypass stale command-affected cache entries', async (t) => {
@@ -839,7 +858,7 @@ test('all commands bypass _read while power target fetches bounds directly', asy
       calls.push('bounds')
       return { power_target_watts: 3300, power_target_min_watts: 400, power_target_max_watts: 6000 }
     },
-    setPowerTarget: async () => { calls.push('target') },
+    setPowerTarget: async watts => { calls.push('target'); return { power_target_watts: watts } },
     setLED: async () => { calls.push('led') },
     setPools: async () => { calls.push('pools') }
   })

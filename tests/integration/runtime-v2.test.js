@@ -260,6 +260,42 @@ test('native performance policies and min/max power presets preserve independent
   }
 })
 
+test('target echo mismatches produce FAILED command results without retrying writes', async t => {
+  const cleanup = createCleanupStack(t)
+  const firmware = createServer()
+  cleanup.add(() => firmware.close())
+  const address = await firmware.ready
+  let target = firmware.state.target
+  Object.defineProperty(firmware.state, 'target', {
+    get: () => target,
+    set: updated => { target = { ...updated, performance_mode: 'MaximumHashrate' } }
+  })
+  const runtime = new WorkerRuntimeV2(WORKER_DIR, {
+    workerId: 'unverified-power-worker',
+    devices: [{ deviceId: 'power-1', config: { address: '127.0.0.1', port: address.port, password: 'test-password' } }]
+  })
+  cleanup.add(() => runtime.stop())
+  try {
+    await runtime.start()
+    for (const [command, params] of [
+      ['setPerformanceMode', { mode: 'Efficiency' }],
+      ['setPowerPreset', { preset: 'min' }]
+    ]) {
+      target.performance_mode = 'Efficiency'
+      const before = firmware.state.writeAttempts['/api/v1/mining/target'] || 0
+      const result = (await runtime.handleRequest(request(ACTIONS.COMMAND_REQUEST, 'power-1', {
+        commandId: command, command, params
+      }))).payload
+      t.is(result.status, 'FAILED')
+      t.is(result.error, 'ERR_POWER_TARGET_WRITE_UNVERIFIED')
+      t.is(firmware.state.writeAttempts['/api/v1/mining/target'], before + 1, 'the uncertain write is not replayed')
+    }
+    t.is(target.power_target_watts, target.power_target_min_watts, 'a failed verification does not undo the physical write')
+  } finally {
+    await cleanup.cleanupAll()
+  }
+})
+
 test('health derives safe device state without exposing failures', async (t) => {
   const cleanup = createCleanupStack(t)
   const statusByPath = {}

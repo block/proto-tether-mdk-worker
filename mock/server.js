@@ -220,6 +220,8 @@ function route (req, res, state, url, pathname, body) {
       body.power_target_watts < state.target.power_target_min_watts || body.power_target_watts > state.target.power_target_max_watts)) throw mockError(400)
     if (body.performance_mode !== undefined && !['MaximumHashrate', 'Efficiency'].includes(body.performance_mode)) throw mockError(400)
     state.writeAttempts[pathname] = (state.writeAttempts[pathname] || 0) + 1
+    // Partial updates mirror the reference simulator and OpenAPI request shape;
+    // preservation on live firmware still needs verification.
     state.target = { ...state.target, ...body }
     return sendJson(res, 200, state.target)
   }
