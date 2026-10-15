@@ -8,14 +8,6 @@ function response (status, text = '') {
   return { status, ok: status >= 200 && status < 300, text: async () => text }
 }
 
-const history = {
-  'hashrate-data': {
-    duration: '1h',
-    data: [{ datetime: 1704067200, value: 95.5 }, { datetime: 1704067260, value: null }],
-    aggregates: { min: null, avg: 95.5, max: 95.5 }
-  }
-}
-
 const logs = { logs: { source: 'miner_sw', lines: 2, content: ['started', 'mining'] } }
 const psus = { 'psus-info': [{ psu_sn: 'PSU-1', slot: 2, power: { input_power_mw: 386800 } }] }
 
@@ -25,27 +17,21 @@ test('diagnostic reads return validated raw envelopes and documented query defau
     request: async (path) => {
       calls.push(path)
       if (path === '/hardware/psus') return psus
-      if (path.startsWith('/hashrate?')) return history
       return logs
     }
   })
   t.alike(await api.getPowerSupplies(), psus)
-  t.alike(await api.getHashrateHistory(), history)
   t.alike(await api.getLogs(), logs)
-  await api.getHashrateHistory('5d')
   await api.getLogs('miner_web_server', 10000)
   t.alike(calls, [
-    '/hardware/psus', '/hashrate?duration=1h', '/system/logs?source=miner_sw&lines=100',
-    '/hashrate?duration=5d', '/system/logs?source=miner_web_server&lines=10000'
+    '/hardware/psus', '/system/logs?source=miner_sw&lines=100',
+    '/system/logs?source=miner_web_server&lines=10000'
   ])
-  const optional = { 'hashrate-data': { duration: '1h', data: [] } }
-  t.alike(await new ApiV1({ request: async () => optional }).getHashrateHistory(), optional, 'history aggregates may be absent')
 })
 
 test('diagnostic reads reject malformed successful responses', async (t) => {
   const cases = [
     ['getPowerSupplies', [null, {}, { 'psus-info': {} }, { 'psus-info': [null] }], 'ERR_PSUS_RESPONSE_INVALID'],
-    ['getHashrateHistory', [null, {}, { 'hashrate-data': [] }, { 'hashrate-data': { duration: '1h', data: [null], aggregates: {} } }, { 'hashrate-data': { duration: '1h', data: [], aggregates: null } }, { 'hashrate-data': { duration: '1h', data: [], aggregates: [] } }], 'ERR_HASHRATE_RESPONSE_INVALID'],
     ['getLogs', [null, {}, { logs: [] }, { logs: { ...logs.logs, content: [1] } }, { logs: { ...logs.logs, lines: '2' } }], 'ERR_LOGS_RESPONSE_INVALID']
   ]
   for (const [method, payloads, message] of cases) {

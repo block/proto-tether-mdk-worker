@@ -53,9 +53,9 @@ The worker exposes these telemetry values from `mdk-contract.json`:
 | `psu_info` | `` | object | Power supply inventory, firmware versions, electrical readings, and temperatures. |
 | `fans` | `` | array | Individual measured fan RPM with optional slot and percentage. |
 | `pool_url` | `` | string | Active pool URL, falling back to the first configured pool; an empty string if none. |
-| `hashrate_history` | `` | object | Firmware history for `1h` (default), `12h`, `24h`, `48h`, or `5d`. |
+| `asic_stats` | `` | object | Current chip measurements and identities, grouped by hashboard. |
 
-Query these channels with `telemetry.pull`, addressing a device and setting `payload.query.type` to the channel name, for example `{ "query": { "type": "errors" } }`. They are also included in aggregate `metrics`. Each uses only its own source endpoints; a failed mining-statistics or power-target read does not prevent querying device or firmware information. HTTP failures remain errors, rather than being reported as empty data. Missing optional fields are omitted in wire JSON.
+Query these channels with `telemetry.pull`, addressing a device and setting `payload.query.type` to the channel name, for example `{ "query": { "type": "errors" } }`. They are also included in aggregate `metrics`. Each uses only its own source endpoints; a failed mining-statistics or power-target read does not prevent querying device or firmware information. HTTP failures remain errors, rather than being reported as empty data; `asic_stats` isolates status-read failures per board as described below. Missing optional fields are omitted in wire JSON.
 
 | Channel | Returned fields |
 | --- | --- |
@@ -68,7 +68,41 @@ Query these channels with `telemetry.pull`, addressing a device and setting `pay
 
 `fans` returns `[{ rpm, slot?, percentage? }]`, with percentage from 0 through 100. `pool_url` prefers a pool whose status is `Active`, then the first configured pool, and rejects URLs containing userinfo. Both channels share their source caches with existing cooling/pool reads.
 
-Query history with `{ "query": { "type": "hashrate_history", "duration": "12h" } }`. Only `duration` is accepted as a history parameter. The result is `{ duration, data: [{ datetime, value }], aggregates?: { min?, avg?, max? } }`, where `datetime` is Unix seconds and null values preserve missing samples. Aggregate readings also preserve null when unavailable, including an empty startup history with all three aggregates null. Hashrate values keep the firmware's original units because the history API declares no unit; the worker does not infer TH/s or synthesize time windows. Aggregate `metrics` includes the default `1h` history unless a duration is supplied. History caches are separate per device and duration. Invalid durations report `ERR_HASHRATE_DURATION_INVALID`; malformed responses report `ERR_HASHRATE_RESPONSE_INVALID`.
+Query ASIC diagnostics with `{ "query": { "type": "asic_stats" } }`. The response is:
+
+```json
+{
+  "hashboards": [{
+    "serial_number": "HB001",
+    "slot": 1,
+    "board_type": "B4_192",
+    "asic_type": "MC3",
+    "expected_asic_count": 192,
+    "status": "Running",
+    "reported_asic_count": 1,
+    "asics": [{
+      "index": 7,
+      "id": "A7",
+      "row": 0,
+      "column": 7,
+      "frequency_mhz": 650,
+      "temperature_c": 45.5,
+      "voltage_v": 0.3085,
+      "hashrate_ths": 0.3005,
+      "ideal_hashrate_ths": 0.32,
+      "error_rate_pct": 0.1
+    }]
+  }]
+}
+```
+
+Only `serial_number` is always present on each board. `index` is required on each returned ASIC; IDs, coordinates and measurements are included only when reported. Chip identity is the combination of board serial and explicit ASIC index, not its position in the response array. Slot is the physical board slot. Expected count comes from inventory; reported count is the number of returned ASIC records and is omitted if the firmware omits the ASIC array. An empty array means zero records were reported, not that the worker diagnosed dead chips. No alarm thresholds or health classifications are inferred. Error rate is the firmware's reported percentage; its sampling window is unspecified. Temperatures may be negative; present null or malformed measurements are rejected rather than converted to zero.
+
+Each ASIC collection reads `/hashboards` once, then `/hashboards/{serial}` once per board, with at most two board reads in flight. Inventory order is preserved. Concurrent pulls for the same device share the outstanding collection, but receive independent result objects. No completed ASIC response or inventory is retained, regardless of `cacheMs`; each subsequent pull reads the rig again. Mining-mode and power-target writes invalidate any outstanding shared ASIC collection for subsequent readers.
+
+A failed board returns its inventory metadata and `error: "ERR_ASIC_STATS_UNAVAILABLE"`; a malformed board response returns `error: "ERR_ASIC_STATS_RESPONSE_INVALID"`. Failed boards have no ASIC readings or reported count, while successful boards remain available. Invalid inventory fails the channel. Free-form errors, logs, firmware-update messages and undeclared fields are omitted.
+
+Aggregate `metrics` includes `asic_stats`, so it incurs these board reads on each collection. The existing `snap` and `hashboards` channels remain unchanged and do not fetch ASIC details. Declaring a channel does not automatically persist it: a host that needs ASIC history must explicitly collect and store these current readings. This worker does not call miner history endpoints; `hashrate_history` has been removed.
 
 These additions provide the diagnostic channel names exposed by the [Antminer contract](https://github.com/bitmain-official/antminer-mdk-worker/blob/4fd776b4a048a1bc8284ec2eceed82b4631f960c/mdk-contract.json) and [WhatsMiner contract](https://github.com/whatsminer/whatsminer-mdk-worker/blob/a47fa82020454f9bfa9963ccaaa319b7948e8aa2/mdk-contract.json), using fields reported by [Proto public API v1](https://block.github.io/proto-fleet/proto-api-docs/). The existing `snap` response and its field validation remain unchanged. No extra performance modes or ASIC-level diagnostics are synthesized.
 

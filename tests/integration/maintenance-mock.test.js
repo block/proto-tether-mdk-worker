@@ -4,9 +4,6 @@ const { createHash } = require('node:crypto')
 const http = require('node:http')
 const test = require('brittle')
 const { createServer } = require('../../mock/server')
-const { ProtoHttpClient } = require('../../lib/http-client')
-const { ApiV1 } = require('../../lib/api-v1')
-const { ProtoRigClient } = require('../../lib/proto-rig-client')
 
 async function fixture (t, opts = {}) {
   const mock = createServer(opts)
@@ -70,56 +67,6 @@ test('mock PSU fixture preserves PsuInfo field names and milliunits', async t =>
       temperatures: [{ temperature_type: 'hotspot', temperature_c: 48 }]
     }]
   })
-})
-
-test('mock hashrate history wraps the fixture, echoes supported durations and preserves null gaps', async t => {
-  const { mock, request } = await fixture(t)
-  for (const duration of ['1h', '12h', '24h', '48h', '5d']) {
-    const response = await request(`/hashrate?duration=${duration}`)
-    t.is(response.status, 200)
-    const data = (await response.json())['hashrate-data']
-    t.is(data.duration, duration)
-    t.alike(data.data, mock.state.hashrateHistory.data)
-    t.is(data.data[1].value, null)
-    t.alike(data.aggregates, { min: 94, avg: 95, max: 96 })
-  }
-  t.is((await (await request('/hashrate')).json())['hashrate-data'].duration, '1h')
-  t.is((await request('/hashrate?duration=2h')).status, 400)
-  mock.state.hashrateHistory = { data: [], aggregates: { min: null, avg: null, max: null } }
-  t.alike(await (await request('/hashrate')).json(), {
-    'hashrate-data': { duration: '1h', data: [], aggregates: { min: null, avg: null, max: null } }
-  })
-})
-
-test('default mock history is readable through the real client for every supported duration', async t => {
-  const { mock } = await fixture(t)
-  const { port } = await mock.ready
-  const api = new ApiV1(new ProtoHttpClient({
-    address: '127.0.0.1',
-    port,
-    accessToken: 'mock-access-1'
-  }))
-  const client = new ProtoRigClient({ id: 'mock-rig', api, cacheMs: 0 })
-
-  for (const duration of ['1h', '12h', '24h', '48h', '5d']) {
-    t.alike(await client.getHashrateHistory({ duration }), {
-      duration,
-      data: [
-        { datetime: 1767225600, value: 94 },
-        { datetime: 1767225660, value: null },
-        { datetime: 1767225720, value: 96 }
-      ],
-      aggregates: { min: 94, avg: 95, max: 96 }
-    })
-  }
-  mock.state.hashrateHistory = { data: [], aggregates: { min: null, avg: null, max: null } }
-  for (const duration of ['1h', '12h', '24h', '48h', '5d']) {
-    t.alike(await client.getHashrateHistory({ duration }), {
-      duration,
-      data: [],
-      aggregates: { min: null, avg: null, max: null }
-    }, 'startup history remains readable through the real HTTP adapter')
-  }
 })
 
 test('mock log tails use declared sources and actual returned line counts including empty logs', async t => {

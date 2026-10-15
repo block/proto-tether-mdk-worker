@@ -4,7 +4,6 @@ const http = require('node:http')
 const { createHash } = require('node:crypto')
 
 const MAX_BODY_BYTES = 512 * 1024 * 1024 + 1024 * 1024
-const HISTORY_DURATIONS = new Set(['1h', '12h', '24h', '48h', '5d'])
 const LOG_SOURCES = new Set(['os', 'pool_sw', 'miner_sw', 'miner_web_server'])
 
 function createState (opts = {}) {
@@ -93,13 +92,13 @@ function createState (opts = {}) {
       },
       temperatures: [{ temperature_type: 'hotspot', temperature_c: 48 }]
     }],
-    hashrateHistory: {
-      data: [
-        { datetime: 1767225600, value: 94 },
-        { datetime: 1767225660, value: null },
-        { datetime: 1767225720, value: 96 }
-      ],
-      aggregates: { min: 94, avg: 95, max: 96 }
+    hashboardInfo: [
+      { hb_sn: 'HB001', slot: 1, board: 'B4_192', mining_asic: 'MC3', mining_asic_count: 2 },
+      { hb_sn: 'HB002', slot: 2, board: 'B4_192', mining_asic: 'MC3', mining_asic_count: 1 }
+    ],
+    hashboardStats: {
+      HB001: { hb_sn: 'HB001', slot: 1, status: 'Running', asics: [mockAsic(0), mockAsic(1)] },
+      HB002: { hb_sn: 'HB002', slot: 2, status: 'Running', asics: [mockAsic(0)] }
     },
     logs: {
       os: ['Mock kernel started'],
@@ -136,6 +135,21 @@ function createState (opts = {}) {
       soc: { model: 'soc-model' },
       sw_update_status: { status: 'Idle' }
     }
+  }
+}
+
+function mockAsic (index) {
+  return {
+    index,
+    id: `A${index}`,
+    row: 0,
+    column: index,
+    freq_mhz: 650,
+    temp_c: 45.5 + index,
+    voltage_mv: 308.5,
+    hashrate_ghs: 300.5,
+    ideal_hashrate_ghs: 320,
+    error_rate: 0.1
   }
 }
 
@@ -233,10 +247,14 @@ function route (req, res, state, url, pathname, body) {
   if (req.method === 'GET' && pathname === '/api/v1/errors') return sendJson(res, 200, state.errors)
   if (req.method === 'GET' && pathname === '/api/v1/cooling') return sendJson(res, 200, { 'cooling-status': state.cooling })
   if (req.method === 'GET' && pathname === '/api/v1/hardware/psus') return sendJson(res, 200, { 'psus-info': state.psus })
-  if (req.method === 'GET' && pathname === '/api/v1/hashrate') {
-    const duration = url.searchParams.get('duration') || '1h'
-    if (!HISTORY_DURATIONS.has(duration)) throw mockError(400)
-    return sendJson(res, 200, { 'hashrate-data': { ...state.hashrateHistory, duration } })
+  if (req.method === 'GET' && pathname === '/api/v1/hashboards') {
+    return sendJson(res, 200, { 'hashboards-info': state.hashboardInfo })
+  }
+  const boardPath = /^\/api\/v1\/hashboards\/([^/]+)$/.exec(pathname)
+  if (req.method === 'GET' && boardPath) {
+    const serial = decodeURIComponent(boardPath[1])
+    if (!Object.hasOwn(state.hashboardStats, serial)) return sendJson(res, 404, { error: 'not found' })
+    return sendJson(res, 200, { 'hashboard-stats': state.hashboardStats[serial] })
   }
   if (req.method === 'GET' && pathname === '/api/v1/system/logs') {
     const source = url.searchParams.get('source') || 'miner_sw'

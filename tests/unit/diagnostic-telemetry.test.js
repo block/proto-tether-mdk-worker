@@ -122,69 +122,6 @@ test('PSU detail rejects malformed declared fields without publishing free-form 
   }
 })
 
-test('hashrate history preserves source values null gaps and declared aggregates', async (t) => {
-  const client = clientFor({
-    getHashrateHistory: async duration => ({
-      'hashrate-data': {
-        duration,
-        data: [{ datetime: 1704067200, value: 95.5, arbitrary: 'secret' }, { datetime: 1704067260, value: null }],
-        aggregates: { min: 0, avg: null, max: null, arbitrary: 'secret' },
-        unit: 'undocumented',
-        hashrate_rt: { fabricated: 1 }
-      },
-      secret: true
-    })
-  })
-  t.alike(await client.getHashrateHistory(), {
-    duration: '1h',
-    data: [{ datetime: 1704067200, value: 95.5 }, { datetime: 1704067260, value: null }],
-    aggregates: { min: 0, avg: null, max: null }
-  })
-  const projection = await client.getHashrateHistory()
-  projection.data[0].value = 99
-  t.is((await client.getHashrateHistory()).data[0].value, 95.5)
-  t.alike(await clientFor({ getHashrateHistory: async duration => ({ 'hashrate-data': { duration, data: [] } }) }).getHashrateHistory({ duration: '5d' }), { duration: '5d', data: [] })
-  t.alike(await clientFor({ getHashrateHistory: async duration => ({ 'hashrate-data': { duration, data: [], aggregates: {} } }) }).getHashrateHistory(), { duration: '1h', data: [], aggregates: {} })
-  for (const data of [[], [{ datetime: 1704067200, value: null }]]) {
-    const history = { duration: '1h', data, aggregates: { min: null, avg: null, max: null } }
-    t.alike(await clientFor({ getHashrateHistory: async () => ({ 'hashrate-data': history }) }).getHashrateHistory(), history, 'unavailable history aggregates preserve null readings')
-  }
-})
-
-test('hashrate history validates duration before I/O and malformed source values', async (t) => {
-  let calls = 0
-  const client = clientFor({ getHashrateHistory: async () => { calls++; return {} } })
-  for (const params of [null, [], '1h', { duration: null }, { duration: 1 }, { duration: '2h' }, { duration: '1h', other: true }]) {
-    await t.exception(client.getHashrateHistory(params), /ERR_HASHRATE_DURATION_INVALID/)
-  }
-  t.is(calls, 0)
-  const changes = [null, [], {}, { duration: '12h', data: [] }, { duration: 'wrong', data: [] },
-    { duration: '1h', data: {} }, { duration: '1h', data: [null] }, { duration: '1h', data: [[]] }]
-  for (const datetime of [undefined, null, '1', -1, 0.5, Number.MAX_SAFE_INTEGER + 1]) changes.push({ duration: '1h', data: [{ datetime, value: 1 }] })
-  for (const value of [undefined, '1', -1, Infinity, NaN]) changes.push({ duration: '1h', data: [{ datetime: 1, value }] })
-  for (const aggregates of [null, [], { min: '1' }, { min: -1 }, { min: Infinity }, { avg: '1' }, { max: Infinity }]) changes.push({ duration: '1h', data: [], aggregates })
-  for (const data of changes) {
-    await t.exception(clientFor({ getHashrateHistory: async () => ({ 'hashrate-data': data }) }).getHashrateHistory(), /ERR_HASHRATE_RESPONSE_INVALID/)
-  }
-  for (const payload of [null, [], {}, { duration: '1h', data: [] }]) {
-    await t.exception(clientFor({ getHashrateHistory: async () => payload }).getHashrateHistory(), /ERR_HASHRATE_RESPONSE_INVALID/)
-  }
-})
-
-test('history accepts exactly the declared durations without changing firmware units', async (t) => {
-  const durations = []
-  const client = clientFor({
-    getHashrateHistory: async duration => {
-      durations.push(duration)
-      return { 'hashrate-data': { duration, data: [{ datetime: 0, value: 95500000000000 }] } }
-    }
-  })
-  for (const duration of ['1h', '12h', '24h', '48h', '5d']) {
-    t.alike(await client.getHashrateHistory({ duration }), { duration, data: [{ datetime: 0, value: 95500000000000 }] })
-  }
-  t.alike(durations, ['1h', '12h', '24h', '48h', '5d'])
-})
-
 test('detail-only fan metadata and pool counters leave legacy snapshot unchanged', async (t) => {
   const client = clientFor({
     getMiningStatus: async () => ({ status: 'Mining', reboot_uptime_s: 1 }),
@@ -207,33 +144,29 @@ test('detail-only fan metadata and pool counters leave legacy snapshot unchanged
   await t.exception(client.getPools(), /ERR_POOLS_RESPONSE_INVALID/)
 })
 
-test('diagnostic sources cache per device and history duration while failures propagate', async (t) => {
-  const calls = { cooling: 0, pools: 0, psus: 0, history: [] }
+test('existing diagnostic sources cache per device while failures propagate', async (t) => {
+  const calls = { cooling: 0, pools: 0, psus: 0 }
   const api = {
     getCooling: async () => { calls.cooling++; return { 'cooling-status': { fans: [{ rpm: 4000 }] } } },
     getPools: async () => { calls.pools++; return [{ url: 'stratum+tcp://pool:3333', accepted: 0, rejected: 0 }] },
     getPowerSupplies: async () => { calls.psus++; return { 'psus-info': [] } },
-    getHashrateHistory: async duration => { calls.history.push(duration); return { 'hashrate-data': { duration, data: [] } } },
     reboot: async () => {},
     setPools: async () => {}
   }
   const first = clientFor(api, { cacheMs: 5000 })
   const second = clientFor(api, { cacheMs: 5000 })
-  await Promise.all([first.getFans(), first.getFanSpeed(), first.getPoolUrl(), first.getPools(), first.getPsuInfo(), first.getPsuInfo(), first.getHashrateHistory(), first.getHashrateHistory({ duration: '1h' }), first.getHashrateHistory({ duration: '12h' })])
-  t.alike(calls, { cooling: 1, pools: 1, psus: 1, history: ['1h', '12h'] })
+  await Promise.all([first.getFans(), first.getFanSpeed(), first.getPoolUrl(), first.getPools(), first.getPsuInfo(), first.getPsuInfo()])
+  t.alike(calls, { cooling: 1, pools: 1, psus: 1 })
   await second.getPsuInfo()
-  await second.getHashrateHistory()
   t.is(calls.psus, 2, 'PSU cache stays local to the device')
-  t.alike(calls.history, ['1h', '12h', '1h'], 'history cache stays local to the device')
   await first.setupPools([{ url: 'stratum+tcp://pool:3333', worker_name: 'worker' }])
   await first.getPoolUrl()
   t.is(calls.pools, 2, 'existing pool writes invalidate the shared pool source')
   await first.reboot()
-  await Promise.all([first.getFans(), first.getPsuInfo(), first.getHashrateHistory(), first.getHashrateHistory({ duration: '12h' })])
+  await Promise.all([first.getFans(), first.getPsuInfo()])
   t.is(calls.cooling, 2)
   t.is(calls.psus, 3)
-  t.alike(calls.history, ['1h', '12h', '1h', '1h', '12h'], 'reboot clears all duration entries')
-  for (const [getter, source] of [['getFans', 'getCooling'], ['getPoolUrl', 'getPools'], ['getPsuInfo', 'getPowerSupplies'], ['getHashrateHistory', 'getHashrateHistory']]) {
+  for (const [getter, source] of [['getFans', 'getCooling'], ['getPoolUrl', 'getPools'], ['getPsuInfo', 'getPowerSupplies']]) {
     let attempts = 0
     const broken = clientFor({ [source]: async () => { attempts++; throw new Error('ERR_HTTP_TIMEOUT') } }, { cacheMs: 5000 })
     await t.exception(broken[getter](), /ERR_HTTP_TIMEOUT/)
