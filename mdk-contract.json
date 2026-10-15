@@ -25,7 +25,15 @@
       { "name": "pools", "unit": "", "type": "array", "handler": "src/telemetry/pools.js", "description": "Configured pool URL, username, status and accepted/rejected share counts, with optional stale, id, priority, name and protocol. Stale shares stay absent when firmware does not report them. Passwords and authority keys are omitted; URLs with userinfo are rejected." },
       { "name": "hashboards", "unit": "", "type": "array", "handler": "src/telemetry/hashboards.js", "description": "Per-board index, optional serial_number, measured temperature_c {inlet, outlet, avg}, and optional hashrate_ths, power_w, efficiency_w_ths, voltage_v and current_a. Missing readings stay absent; inlet/outlet temperatures are not ASIC chip temperatures." },
       { "name": "device_info", "unit": "", "type": "object", "handler": "src/telemetry/device-info.js", "description": "Device ID, product, manufacturer, model and serial number with optional non-secret network mode, IP, gateway, netmask, MAC and hostname. Missing or blank network strings stay absent; malformed present types and a missing network-info object remain errors. Independent of mining statistics; credentials and arbitrary firmware fields are omitted." },
-      { "name": "firmware_info", "unit": "", "type": "object", "handler": "src/telemetry/firmware-info.js", "description": "Reported OS version/build metadata and names/versions for mining driver, pool interface, web server, web dashboard and hashboard firmware. Missing components stay absent. Runtime OS status and free-form update messages are omitted." }
+      { "name": "firmware_info", "unit": "", "type": "object", "handler": "src/telemetry/firmware-info.js", "description": "Reported OS version/build metadata and names/versions for mining driver, pool interface, web server, web dashboard and hashboard firmware. Missing components stay absent. Runtime OS status and free-form update messages are omitted." },
+      { "name": "psu_info", "unit": "", "type": "object", "handler": "src/telemetry/psu-info.js", "description": "Power supply inventory as {psus: [...]}, with optional identity, slot, firmware versions, power readings in volts, amps and watts, and temperatures in Celsius. Missing fields stay absent; an empty psus array means no reported supplies. Credentials, free-form messages and undeclared fields are omitted." },
+      { "name": "fans", "unit": "", "type": "array", "handler": "src/telemetry/fans.js", "description": "Measured cooling fans as {rpm, slot?, percentage?}. Percentage is an integer from 0 through 100; absent metadata stays absent. An empty array means no reported fans. Undeclared fields are omitted." },
+      { "name": "pool_url", "unit": "", "type": "string", "handler": "src/telemetry/pool-url.js", "description": "URL of the Active pool, falling back to the first configured pool. An empty string means no pools are configured. URLs with userinfo are rejected; pool passwords are never published." },
+      {
+        "name": "hashrate_history", "unit": "", "type": "object", "handler": "src/telemetry/hashrate-history.js",
+        "description": "Firmware history as {duration, data: [{datetime, value}], aggregates?: {min?, avg?, max?}}. Datetime is Unix seconds; null values preserve gaps. Hashrate values retain firmware units because the history API declares no unit. Duration defaults to 1h. Cached separately per device and duration; no synthesized samples or windows.",
+        "params": [{ "name": "duration", "type": "string", "enum": ["1h", "12h", "24h", "48h", "5d"] }]
+      }
     ],
     "commands": [
       {
@@ -71,6 +79,30 @@
           { "name": "pools", "type": "object", "required": true },
           { "name": "appendId", "type": "boolean" }
         ]
+      },
+      {
+        "name": "downloadLogs",
+        "description": "Returns a redacted firmware log tail as {source, lines, content}. This command reads logs without changing the device.",
+        "constraints": "source defaults to miner_sw and must be os, pool_sw, miner_sw or miner_web_server. lines defaults to 100 and must be an integer from 1 through 10000. Known device credentials, bearer tokens and recognized credential fields are redacted; review free-form logs before sharing.",
+        "handler": "src/commands/download-logs.js",
+        "params": [
+          { "name": "source", "type": "string", "enum": ["os", "pool_sw", "miner_sw", "miner_web_server"] },
+          { "name": "lines", "type": "number", "min": 1, "max": 10000 }
+        ]
+      },
+      {
+        "name": "setNetwork",
+        "description": "Changes device networking using network: {dhcp, ip?, netmask?, gateway?, hostname?}. Returns {success: true} after a successful HTTP response.",
+        "constraints": "dhcp is a required boolean. Static mode requires IPv4 ip and a contiguous IPv4 netmask; gateway is optional IPv4. DHCP mode rejects ip, netmask and gateway. Optional hostname is one DNS label of 1 through 63 letters, digits or internal hyphens. Unknown fields are rejected. The device may change address or disconnect; preserve the previous settings and verify reachability independently. Do not retry after an unknown network outcome.",
+        "handler": "src/commands/set-network.js",
+        "params": [{ "name": "network", "type": "object", "required": true }]
+      },
+      {
+        "name": "updateFirmware",
+        "description": "Starts an OTA update when firmware is omitted, or uploads a firmware image. Returns {accepted: true, completed: false, mode: ota|upload}; acceptance does not confirm installation or reboot completion.",
+        "constraints": "Optional firmware must contain filename (a basename ending in .swu), encoding (base64), size (integer bytes from 1 through 536870912), sha256 (64 hexadecimal characters) and data (canonical base64). The declared size and hash are checked before I/O. The transport must accommodate base64 overhead and its own message limits. Credentials are renewed before the write when a password or refresh token is configured; access-token-only configurations use the existing token. Firmware requests never replay after 401 or ambiguous outcomes. Upload HTTP timeout is 30 minutes; allow sufficient caller time and verify firmware state before another attempt. Concurrent updates on one device are rejected. The overlap guard is process-local and does not deduplicate requests across restarts.",
+        "handler": "src/commands/update-firmware.js",
+        "params": [{ "name": "firmware", "type": "object" }]
       }
     ],
     "config": { "schema": "proto_rig_config_v1" },
@@ -113,6 +145,14 @@
       "ERR_COOLING_RESPONSE_INVALID": "The firmware cooling response was malformed.",
       "ERR_ERRORS_RESPONSE_INVALID": "The firmware errors response was malformed.",
       "ERR_POOLS_RESPONSE_INVALID": "The firmware pools response was malformed or contained an unsafe URL.",
+      "ERR_PSUS_RESPONSE_INVALID": "The firmware power supply response was malformed.",
+      "ERR_HASHRATE_DURATION_INVALID": "History duration must be 1h, 12h, 24h, 48h or 5d, with no extra query parameters.",
+      "ERR_HASHRATE_RESPONSE_INVALID": "The firmware hashrate history response was malformed.",
+      "ERR_LOGS_PARAMETERS_INVALID": "Log source or line count is invalid.",
+      "ERR_LOGS_RESPONSE_INVALID": "The firmware log response was malformed or inconsistent with the request.",
+      "ERR_NETWORK_CONFIG_INVALID": "Network configuration must specify DHCP or valid static IPv4 settings and an optional hostname.",
+      "ERR_FIRMWARE_PAYLOAD_INVALID": "The firmware upload needs a safe .swu filename, canonical base64, matching size and SHA256.",
+      "ERR_FIRMWARE_RESPONSE_INVALID": "Firmware OTA must return HTTP 202 and firmware upload must return HTTP 200; verify the device before another attempt.",
       "ERR_POWER_TARGET_INVALID": "The power target must normalize to a positive safe integer.",
       "ERR_POWER_TARGET_OUT_OF_RANGE": "The power target is outside the bounds reported by the device.",
       "ERR_SET_POWER_MODE_INVALID": "The power mode must be normal or sleep.",

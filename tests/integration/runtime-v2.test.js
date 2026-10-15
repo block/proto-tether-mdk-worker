@@ -118,7 +118,7 @@ test('WorkerRuntimeV2 keeps device state isolated and publishes clean envelopes'
     const capability = await runtime.handleRequest(capabilityRequest)
     assertResponseEnvelope(t, capability, capabilityRequest, ACTIONS.CAPABILITY_RESPONSE, null)
     t.is(capability.payload.contract.metadata.provider, 'proto')
-    t.is(capability.payload.contract.capabilities.telemetry.length, 18)
+    t.is(capability.payload.contract.capabilities.telemetry.length, 22)
     t.ok(capability.payload.contract.capabilities.telemetry.some(entry => entry.name === 'health'))
     for (const entry of capability.payload.contract.capabilities.telemetry) t.is(entry.handler, undefined)
     for (const entry of capability.payload.contract.capabilities.commands) t.is(entry.handler, undefined)
@@ -137,7 +137,7 @@ test('WorkerRuntimeV2 keeps device state isolated and publishes clean envelopes'
     const metrics = await runtime.handleRequest(metricsRequest)
     assertResponseEnvelope(t, metrics, metricsRequest, ACTIONS.TELEMETRY_RESPONSE, 'proto-1')
     t.alike(metrics.payload.metrics.health, { status: 'OK' })
-    t.is(Object.keys(metrics.payload.metrics).length, 18)
+    t.is(Object.keys(metrics.payload.metrics).length, 22)
 
     const serializedTelemetry = `${JSON.stringify(health)}\n${JSON.stringify(metrics)}`.toLowerCase()
     for (const forbidden of [
@@ -248,6 +248,149 @@ test('health derives safe device state without exposing failures', async (t) => 
     t.alike(offline, { status: 'OFFLINE' })
     t.is(JSON.stringify(offline).includes('503'), false)
     t.is(JSON.stringify(offline).includes('health-device-password'), false)
+  } finally {
+    await cleanup.cleanupAll()
+  }
+})
+
+test('psu_info is discoverable and reports isolated PSU reads and errors through the runtime', async (t) => {
+  const cleanup = createCleanupStack(t)
+  const statusByPath = { '/api/v1/mining': 503, '/api/v1/mining/target': 503 }
+  const first = createServer({ statusByPath })
+  const second = createServer({ tokenSeq: 100 })
+  cleanup.add(() => first.close())
+  cleanup.add(() => second.close())
+  const [firstAddress, secondAddress] = await Promise.all([first.ready, second.ready])
+  first.state.psus = [{
+    psu_sn: 'PSU-FIRST',
+    slot: 1,
+    firmware: { app_version: 'psu-v1', message: 'PSU-WIRE-SECRET' },
+    power: { input_voltage_mv: 240000, output_power_mw: 3146000, accessToken: 'PSU-WIRE-SECRET' },
+    temperatures: [{ temperature_type: 'hotspot', temperature_c: 48 }],
+    password: 'PSU-WIRE-SECRET'
+  }]
+  second.state.psus = []
+  const expected = {
+    psus: [{
+      serial_number: 'PSU-FIRST',
+      slot: 1,
+      firmware: { app_version: 'psu-v1' },
+      power: { input_voltage_v: 240, output_power_w: 3146 },
+      temperatures: [{ type: 'hotspot', temperature_c: 48 }]
+    }]
+  }
+  const runtime = new WorkerRuntimeV2(WORKER_DIR, {
+    workerId: 'proto-test',
+    devices: [
+      { deviceId: 'psu-1', config: { address: '127.0.0.1', port: firstAddress.port, password: 'test-password', cacheMs: 0 } },
+      { deviceId: 'psu-2', config: { address: '127.0.0.1', port: secondAddress.port, password: 'test-password', cacheMs: 0 } }
+    ]
+  })
+  cleanup.add(() => runtime.stop())
+
+  try {
+    await runtime.start()
+    const capability = await runtime.handleRequest(request(ACTIONS.CAPABILITY_REQUEST, null))
+    const channel = capability.payload.contract.capabilities.telemetry.find(entry => entry.name === 'psu_info')
+    t.is(channel?.type, 'object', 'PSU information is discoverable as object telemetry')
+    t.is(channel?.handler, undefined, 'discovery omits the private handler path')
+    const pull = (type, deviceId = 'psu-1') => runtime.handleRequest(request(ACTIONS.TELEMETRY_PULL, deviceId, { query: { type } }))
+    const direct = await pull('psu_info')
+    t.is(direct.payload.name, 'psu_info')
+    t.alike(direct.payload.value, expected, 'direct reads project PSU details and convert milliunits')
+    t.alike((await pull('psu_info', 'psu-2')).payload.value, { psus: [] }, 'empty PSU inventories remain isolated by device')
+    t.alike(first.state.requests.filter(entry => entry.method === 'GET').map(entry => entry.path), ['/api/v1/hardware/psus'], 'PSU reads do not depend on mining or snapshot endpoints')
+
+    const metrics = (await pull('metrics')).payload.metrics
+    t.alike(metrics.psu_info, expected, 'aggregate metrics include the same PSU projection')
+    const wire = JSON.stringify({ direct, metrics })
+    for (const forbidden of ['PSU-WIRE-SECRET', 'test-password', 'mock-access-', 'mock-refresh-', 'accessToken', 'password']) {
+      t.is(wire.includes(forbidden), false, `PSU telemetry omits ${forbidden}`)
+    }
+
+    statusByPath['/api/v1/hardware/psus'] = 503
+    const failed = await pull('psu_info')
+    t.is(failed.payload.error, 'ERR_HTTP_RESPONSE: 503')
+    t.is(Object.hasOwn(failed.payload, 'value'), false, 'failed reads never become empty inventories')
+    const failedMetrics = (await pull('metrics')).payload.metrics
+    t.alike(failedMetrics.psu_info, { error: 'ERR_HTTP_RESPONSE: 503' })
+    t.is(failedMetrics.power, 3250, 'a PSU failure does not suppress independent telemetry')
+    delete statusByPath['/api/v1/hardware/psus']
+    first.state.psus = null
+    t.is((await pull('psu_info')).payload.error, 'ERR_PSUS_RESPONSE_INVALID', 'malformed successful responses keep their validation error')
+    t.alike((await pull('psu_info', 'psu-2')).payload.value, { psus: [] }, 'another rig remains readable after a PSU failure')
+  } finally {
+    await cleanup.cleanupAll()
+  }
+})
+
+test('remaining diagnostics support runtime discovery, query parameters and independent failures', async (t) => {
+  const cleanup = createCleanupStack(t)
+  const statusByPath = { '/api/v1/mining': 503, '/api/v1/mining/target': 503 }
+  const first = createServer({ statusByPath })
+  const second = createServer({ tokenSeq: 100 })
+  cleanup.add(() => first.close())
+  cleanup.add(() => second.close())
+  const [firstAddress, secondAddress] = await Promise.all([first.ready, second.ready])
+  first.state.cooling.fans = [{ slot: 3, rpm: 4500, percentage: 60, password: 'DIAGNOSTIC-SECRET' }]
+  second.state.cooling.fans = []
+  second.state.pools = []
+  const runtime = new WorkerRuntimeV2(WORKER_DIR, {
+    workerId: 'proto-test',
+    devices: [
+      { deviceId: 'diag-1', config: { address: '127.0.0.1', port: firstAddress.port, password: 'test-password', cacheMs: 5000 } },
+      { deviceId: 'diag-2', config: { address: '127.0.0.1', port: secondAddress.port, password: 'test-password', cacheMs: 0 } }
+    ]
+  })
+  cleanup.add(() => runtime.stop())
+  try {
+    await runtime.start()
+    const capability = await runtime.handleRequest(request(ACTIONS.CAPABILITY_REQUEST, null))
+    const channels = capability.payload.contract.capabilities.telemetry
+    for (const [name, type] of [['fans', 'array'], ['pool_url', 'string'], ['hashrate_history', 'object']]) {
+      t.is(channels.find(entry => entry.name === name)?.type, type, `${name} is discoverable`)
+    }
+    const pull = async (type, params = {}, deviceId = 'diag-1') => {
+      const response = await runtime.handleRequest(request(ACTIONS.TELEMETRY_PULL, deviceId, { query: { type, ...params } }))
+      return response.payload
+    }
+    const fans = await pull('fans')
+    t.alike(fans.value, [{ rpm: 4500, slot: 3, percentage: 60 }])
+    t.is((await pull('pool_url')).value, 'stratum+tcp://pool:3333')
+    for (const duration of ['1h', '12h', '24h', '48h', '5d']) {
+      const history = await pull('hashrate_history', { duration })
+      t.alike(history.value, {
+        duration,
+        data: [{ datetime: 1767225600, value: 94 }, { datetime: 1767225660, value: null }, { datetime: 1767225720, value: 96 }],
+        aggregates: { min: 94, avg: 95, max: 96 }
+      }, `runtime forwards the ${duration} query without inventing units`)
+    }
+    await pull('hashrate_history')
+    t.is(first.state.requests.filter(entry => entry.path === '/api/v1/hashrate').length, 5, 'default duration shares the 1h cache')
+    t.is(first.state.requests.some(entry => entry.path === '/api/v1/mining'), false, 'detail reads do not need mining status')
+    const before = first.state.requests.length
+    t.is((await pull('hashrate_history', { duration: '2h' })).error, 'ERR_HASHRATE_DURATION_INVALID')
+    t.is(first.state.requests.length, before, 'invalid durations are rejected before HTTP')
+    t.alike((await pull('fans', {}, 'diag-2')).value, [])
+    t.is((await pull('pool_url', {}, 'diag-2')).value, '', 'no configured pool returns the declared string type')
+    const metrics = (await pull('metrics')).metrics
+    t.alike(metrics.fans, fans.value)
+    t.is(metrics.pool_url, 'stratum+tcp://pool:3333')
+    t.is(metrics.hashrate_history?.duration, '1h')
+    t.is(JSON.stringify(metrics).includes('DIAGNOSTIC-SECRET'), false)
+    second.state.hashrateHistory = { data: [] }
+    t.alike((await pull('hashrate_history', {}, 'diag-2')).value, { duration: '1h', data: [] }, 'optional history aggregates stay absent through the HTTP adapter')
+    t.alike((await pull('metrics', {}, 'diag-2')).metrics.hashrate_history, { duration: '1h', data: [] }, 'aggregate telemetry accepts omitted history aggregates too')
+    second.state.hashrateHistory.aggregates = { min: null, avg: null, max: null }
+    const emptyHistory = { duration: '1h', data: [], aggregates: { min: null, avg: null, max: null } }
+    t.alike((await pull('hashrate_history', {}, 'diag-2')).value, emptyHistory, 'startup history preserves null aggregates in direct telemetry')
+    t.alike((await pull('metrics', {}, 'diag-2')).metrics.hashrate_history, emptyHistory, 'startup history preserves null aggregates in aggregate telemetry')
+    second.state.hashrateHistory.data = [{ datetime: 'invalid', value: 1 }]
+    t.is((await pull('hashrate_history', {}, 'diag-2')).error, 'ERR_HASHRATE_RESPONSE_INVALID')
+    second.state.pools = [{ url: 'stratum+tcp://user:secret@pool:3333', accepted: 0, rejected: 0 }]
+    t.is((await pull('pool_url', {}, 'diag-2')).error, 'ERR_POOLS_RESPONSE_INVALID')
+    second.state.cooling.fans = [{ rpm: -1 }]
+    t.is((await pull('fans', {}, 'diag-2')).error, 'ERR_COOLING_RESPONSE_INVALID')
   } finally {
     await cleanup.cleanupAll()
   }

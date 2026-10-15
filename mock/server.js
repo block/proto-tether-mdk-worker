@@ -1,6 +1,11 @@
 'use strict'
 
 const http = require('node:http')
+const { createHash } = require('node:crypto')
+
+const MAX_BODY_BYTES = 512 * 1024 * 1024 + 1024 * 1024
+const HISTORY_DURATIONS = new Set(['1h', '12h', '24h', '48h', '5d'])
+const LOG_SOURCES = new Set(['os', 'pool_sw', 'miner_sw', 'miner_web_server'])
 
 function createState (opts = {}) {
   const tokenSeq = opts.tokenSeq || 0
@@ -19,6 +24,7 @@ function createState (opts = {}) {
     writeAttempts: {},
     led: false,
     rebooted: false,
+    updates: [],
     mining: {
       status: 'Mining',
       reboot_uptime_s: 521,
@@ -66,7 +72,40 @@ function createState (opts = {}) {
     cooling: {
       fan_mode: 'Auto',
       speed_percentage: 55,
-      fans: [{ rpm: 5000 }, { rpm: 5100 }]
+      fans: [{ slot: 1, rpm: 5000, percentage: 55 }, { slot: 2, rpm: 5100, percentage: 55 }]
+    },
+    // Synthetic diagnostics fixtures use only the published source fields.
+    psus: [{
+      psu_sn: 'MOCK-PSU-001',
+      slot: 1,
+      manufacturer: 'Simulator',
+      hw_revision: 'mock-1',
+      model: 'Mock PSU',
+      vendor: 'Simulator',
+      firmware: { app_version: 'mock-1', bootloader_version: 'mock-1' },
+      power: {
+        input_voltage_mv: 240000,
+        output_voltage_mv: 12100,
+        input_current_ma: 14000,
+        output_current_ma: 260000,
+        input_power_mw: 3250000,
+        output_power_mw: 3146000
+      },
+      temperatures: [{ temperature_type: 'hotspot', temperature_c: 48 }]
+    }],
+    hashrateHistory: {
+      data: [
+        { datetime: 1767225600, value: 94 },
+        { datetime: 1767225660, value: null },
+        { datetime: 1767225720, value: 96 }
+      ],
+      aggregates: { min: 94, avg: 95, max: 96 }
+    },
+    logs: {
+      os: ['Mock kernel started'],
+      pool_sw: ['Mock pool connected'],
+      miner_sw: ['Mock mining started'],
+      miner_web_server: ['Mock API ready']
     },
     network: {
       mac: '02:00:00:00:00:01',
@@ -129,8 +168,16 @@ function createServer (opts = {}) {
 async function handle (req, res, state, controls) {
   const url = new URL(req.url, 'http://127.0.0.1')
   const pathname = url.pathname
+  const updateWrite = pathname === '/api/v1/system/update' && ['POST', 'PUT'].includes(req.method)
+  if (updateWrite) state.writeAttempts[pathname] = (state.writeAttempts[pathname] || 0) + 1
   const body = await readBody(req)
-  state.requests.push({ method: req.method, path: pathname, url: req.url, authorization: req.headers.authorization || null, body })
+  state.requests.push({
+    method: req.method,
+    path: pathname,
+    url: req.url,
+    authorization: updateWrite ? null : req.headers.authorization || null,
+    body: updateWrite ? body && Buffer.isBuffer(body.file?.bytes) ? { file: uploadMetadata(body.file) } : null : body
+  })
 
   if (controls.delayMs > 0) await delay(controls.delayMs)
 
@@ -142,7 +189,7 @@ async function handle (req, res, state, controls) {
   if (controls.statusByPath[pathname]) return sendJson(res, controls.statusByPath[pathname], { error: 'mock status' })
   if (controls.malformedPaths.has(pathname)) return sendMalformed(res)
   if (controls.disconnectPaths.has(pathname) && req.method !== 'GET' && req.method !== 'HEAD') {
-    state.writeAttempts[pathname] = (state.writeAttempts[pathname] || 0) + 1
+    if (!updateWrite) state.writeAttempts[pathname] = (state.writeAttempts[pathname] || 0) + 1
     return req.socket.destroy()
   }
 
@@ -185,8 +232,42 @@ function route (req, res, state, url, pathname, body) {
   }
   if (req.method === 'GET' && pathname === '/api/v1/errors') return sendJson(res, 200, state.errors)
   if (req.method === 'GET' && pathname === '/api/v1/cooling') return sendJson(res, 200, { 'cooling-status': state.cooling })
+  if (req.method === 'GET' && pathname === '/api/v1/hardware/psus') return sendJson(res, 200, { 'psus-info': state.psus })
+  if (req.method === 'GET' && pathname === '/api/v1/hashrate') {
+    const duration = url.searchParams.get('duration') || '1h'
+    if (!HISTORY_DURATIONS.has(duration)) throw mockError(400)
+    return sendJson(res, 200, { 'hashrate-data': { ...state.hashrateHistory, duration } })
+  }
+  if (req.method === 'GET' && pathname === '/api/v1/system/logs') {
+    const source = url.searchParams.get('source') || 'miner_sw'
+    const lines = Number(url.searchParams.get('lines') ?? 100)
+    if (!LOG_SOURCES.has(source) || !Number.isInteger(lines) || lines < 0 || lines > 10000) throw mockError(400)
+    const content = lines === 0 ? [] : state.logs[source].slice(-lines)
+    return sendJson(res, 200, { logs: { source, lines: content.length, content } })
+  }
   if (req.method === 'GET' && pathname === '/api/v1/network') return sendJson(res, 200, { 'network-info': state.network })
+  if (req.method === 'PUT' && pathname === '/api/v1/network') {
+    const config = body && body['network-config']
+    if (!config || typeof config.dhcp !== 'boolean' || Object.keys(config).some(key => !['dhcp', 'ip', 'netmask', 'gateway', 'hostname'].includes(key))) throw mockError(400)
+    if (!config.dhcp && (typeof config.ip !== 'string' || typeof config.netmask !== 'string')) throw mockError(400)
+    if (Object.entries(config).some(([key, value]) => key !== 'dhcp' && typeof value !== 'string')) throw mockError(400)
+    state.writeAttempts[pathname] = (state.writeAttempts[pathname] || 0) + 1
+    state.network = { ...state.network, ...config }
+    return sendJson(res, 200, { 'network-info': state.network })
+  }
   if (req.method === 'GET' && pathname === '/api/v1/system') return sendJson(res, 200, { 'system-info': state.system })
+  if (pathname === '/api/v1/system/update' && req.method === 'POST') {
+    if (body !== null) throw mockError(400)
+    state.updates.push({ mode: 'ota' })
+    res.statusCode = 202
+    return res.end()
+  }
+  if (pathname === '/api/v1/system/update' && req.method === 'PUT') {
+    if (!body || !Buffer.isBuffer(body.file?.bytes)) throw mockError(400)
+    state.updates.push({ mode: 'upload', ...uploadMetadata(body.file) })
+    res.statusCode = 200
+    return res.end()
+  }
   if (req.method === 'POST' && pathname === '/api/v1/system/reboot') {
     state.writeAttempts[pathname] = (state.writeAttempts[pathname] || 0) + 1
     state.rebooted = true
@@ -246,19 +327,71 @@ function bearer (req) {
 
 function readBody (req) {
   return new Promise((resolve, reject) => {
+    if (Number(req.headers['content-length']) > MAX_BODY_BYTES) {
+      req.resume()
+      reject(mockError(413))
+      return
+    }
     const chunks = []
-    req.on('data', chunk => chunks.push(chunk))
+    let size = 0
+    req.on('data', chunk => {
+      size += chunk.length
+      if (size > MAX_BODY_BYTES) {
+        chunks.length = 0
+        reject(mockError(413))
+        return
+      }
+      chunks.push(chunk)
+    })
     req.on('error', reject)
     req.on('end', () => {
       if (chunks.length === 0) return resolve(null)
-      const text = Buffer.concat(chunks).toString('utf8')
+      if (size > MAX_BODY_BYTES) return
+      const bytes = Buffer.concat(chunks)
       try {
-        resolve(JSON.parse(text))
-      } catch {
-        reject(mockError(400))
+        const contentType = req.headers['content-type'] || ''
+        resolve(/^multipart\/form-data(?:;|$)/i.test(contentType)
+          ? parseMultipart(bytes, contentType)
+          : JSON.parse(bytes.toString('utf8')))
+      } catch (err) {
+        reject(err.statusCode ? err : mockError(400))
       }
     })
   })
+}
+
+// Parse one required binary file part without decoding its payload as text.
+function parseMultipart (bytes, contentType) {
+  const match = /(?:^|;)\s*boundary=(?:"([^"\r\n]+)"|([^;\s]+))/i.exec(contentType)
+  const boundary = match && (match[1] || match[2])
+  if (!boundary || boundary.length > 70 || !/^[\x20-\x7e]+$/.test(boundary)) throw mockError(400)
+  const opening = Buffer.from(`--${boundary}\r\n`)
+  if (!bytes.subarray(0, opening.length).equals(opening)) throw mockError(400)
+  const headerEnd = bytes.indexOf(Buffer.from('\r\n\r\n'), opening.length)
+  if (headerEnd < 0 || headerEnd - opening.length > 16384) throw mockError(400)
+  const headers = bytes.subarray(opening.length, headerEnd).toString('latin1')
+  const disposition = /^Content-Disposition:\s*form-data;\s*name="file";\s*filename="([^"\r\n]+)"\s*$/im.exec(headers)
+  if (!disposition) throw mockError(400)
+  const filename = disposition[1]
+  if (!/^[^/\\]+\.swu$/i.test(filename) || Array.from(filename).some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)) throw mockError(400)
+  const start = headerEnd + 4
+  const delimiter = Buffer.from(`\r\n--${boundary}`)
+  let end = bytes.indexOf(delimiter, start)
+  while (end >= 0) {
+    const suffix = bytes.subarray(end + delimiter.length, end + delimiter.length + 2).toString('ascii')
+    if (suffix === '--' || suffix === '\r\n') break
+    end = bytes.indexOf(delimiter, end + 1)
+  }
+  if (end < 0) throw mockError(400)
+  const footer = bytes.subarray(end + delimiter.length)
+  if (!footer.equals(Buffer.from('--')) && !footer.equals(Buffer.from('--\r\n'))) throw mockError(400)
+  const file = bytes.subarray(start, end)
+  if (file.length > 512 * 1024 * 1024) throw mockError(413)
+  return { file: { filename, bytes: file } }
+}
+
+function uploadMetadata (file) {
+  return { filename: file.filename, size: file.bytes.length, sha256: createHash('sha256').update(file.bytes).digest('hex') }
 }
 
 function sendJson (res, statusCode, body) {
@@ -269,7 +402,7 @@ function sendJson (res, statusCode, body) {
 
 function sendError (res, err) {
   if (res.headersSent) return res.destroy()
-  const statusCode = err && err.statusCode === 400 ? 400 : 500
+  const statusCode = err && [400, 413].includes(err.statusCode) ? err.statusCode : 500
   sendJson(res, statusCode, { error: statusCode === 400 ? 'ERR_MOCK_BAD_REQUEST' : 'ERR_MOCK_REQUEST_FAILED' })
 }
 

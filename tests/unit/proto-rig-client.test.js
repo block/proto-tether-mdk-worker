@@ -930,7 +930,8 @@ test('pools channel projects released pool fields and drops credentials and sibl
     id: 0,
     priority: 1,
     name: '',
-    protocol: 'Stratum V2'
+    protocol: 'Stratum V2',
+    invalid: 5
   }])
   const snap = await client.getSnap()
   t.alike(snap.stats.pool_status, [{ pool: 'stratum2+tcp://pool:3336', accepted: 10, rejected: 2, stale: 3, status: 'Active' }])

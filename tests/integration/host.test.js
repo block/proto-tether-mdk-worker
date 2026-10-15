@@ -3,7 +3,7 @@
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
-const { randomBytes } = require('node:crypto')
+const { randomBytes, createHash } = require('node:crypto')
 const { createRequire } = require('node:module')
 const { spawn } = require('node:child_process')
 const test = require('brittle')
@@ -20,6 +20,120 @@ const DHT = requireFromRuntime('hyperdht')
 const { build, serialize, deserialize } = require(path.join(MDK_REPO, 'backend/core/kernel/lib/protocol/envelope'))
 const WORKER_DIR = path.resolve(__dirname, '../..')
 const RPC_TIMEOUT = 10000
+
+test('maintenance commands work over authorized HRPC with safe results and no firmware replay', { timeout: 60000 }, async (t) => {
+  const testnet = await createTestnet(3, t.teardown)
+  const statusByPath = {}
+  const first = createServer({ statusByPath })
+  const second = createServer({ tokenSeq: 100, disconnectPaths: ['/api/v1/system/update'] })
+  t.teardown(() => first.close())
+  t.teardown(() => second.close())
+  const [firstAddress, secondAddress] = await Promise.all([first.ready, second.ready])
+  first.state.logs.os = [
+    'password=test-password', 'Bearer fake-test-bearer',
+    'password="FAKE quoted, secret; tail"', "api_key='FAKE spaced; secret'",
+    String.raw`refresh_token="FAKE escaped \" quote tail"`, 'fan running'
+  ]
+  const rpc = new HyperswarmRPC({ bootstrap: testnet.bootstrap })
+  t.teardown(() => rpc.destroy())
+  const worker = await startProtoWorker({
+    workerId: 'proto-maintenance',
+    bootstrap: testnet.bootstrap,
+    storeDir: temporaryStore(t),
+    trustedKernelKeys: [rpc.dht.defaultKeyPair.publicKey],
+    devices: [
+      { deviceId: 'maint-1', config: { address: '127.0.0.1', port: firstAddress.port, password: 'test-password', cacheMs: 5000 } },
+      { deviceId: 'maint-2', config: { address: '127.0.0.1', port: secondAddress.port, password: 'test-password', cacheMs: 5000 } }
+    ]
+  })
+  t.teardown(() => worker.stop())
+  let sequence = 0
+  const send = async (action, deviceId, payload) => deserialize(await rpc.request(worker.runtime.getPublicKey(), 'mdk', serialize(build({
+    action, type: 'request', sender: 'maintenance-caller', target: 'proto-maintenance', deviceId, payload
+  })), { timeout: RPC_TIMEOUT }))
+  const command = async (name, params = {}, deviceId = 'maint-1') => {
+    const commandId = `maintenance-${++sequence}`
+    const response = await send('command.request', deviceId, { commandId, command: name, params })
+    t.is(response.action, 'command.result')
+    t.is(response.deviceId, deviceId)
+    t.is(response.payload.commandId, commandId)
+    return response.payload
+  }
+  const pull = async (type) => (await send('telemetry.pull', 'maint-1', { query: { type } })).payload.value
+  const capabilities = (await send('capability.request', null, {})).payload.contract.capabilities
+  const names = capabilities.commands.map(entry => entry.name)
+  t.ok(['downloadLogs', 'setNetwork', 'updateFirmware'].every(name => names.includes(name)), 'maintenance commands are discoverable')
+  // Keep a missing registration failure focused instead of invoking absent commands.
+  if (!names.includes('updateFirmware')) return
+  t.is(capabilities.commands.some(entry => entry.handler !== undefined), false)
+
+  const logs = await command('downloadLogs', { source: 'os', lines: 6 })
+  t.is(logs.status, 'SUCCESS')
+  t.alike(logs.result, { source: 'os', lines: 6, content: ['password=[REDACTED]', 'Bearer [REDACTED]', 'password=[REDACTED]', 'api_key=[REDACTED]', 'refresh_token=[REDACTED]', 'fan running'] })
+  t.alike((await command('downloadLogs', { args: ['os', 1] })).result, { source: 'os', lines: 1, content: ['fan running'] }, 'positional parameters follow contract order')
+  t.alike((await command('downloadLogs')).result, { source: 'miner_sw', lines: 1, content: ['Mock mining started'] })
+  t.alike((await command('downloadLogs', {}, 'maint-2')).result, { source: 'miner_sw', lines: 1, content: ['Mock mining started'] })
+
+  t.is((await pull('device_info')).network.hostname, 'proto-r2-mock')
+  await pull('firmware_info')
+  first.state.system.os.version = 'changed-after-cached-read'
+  const network = { dhcp: false, ip: '192.0.2.25', netmask: '255.255.255.0', gateway: '192.0.2.1', hostname: 'updated-rig' }
+  const configured = await command('setNetwork', { value: network })
+  t.is(configured.status, 'SUCCESS')
+  t.alike(configured.result, { success: true })
+  t.is((await pull('device_info')).network.hostname, 'updated-rig', 'network writes invalidate the device information cache')
+  t.is((await pull('firmware_info')).os.version, 'changed-after-cached-read', 'network writes invalidate system information too')
+  t.is(second.state.network.hostname, 'proto-r2-mock', 'writes stay isolated to the addressed device')
+
+  const ota = await command('updateFirmware')
+  t.is(ota.status, 'SUCCESS')
+  t.alike(ota.result, { accepted: true, completed: false, mode: 'ota' })
+  const bytes = Buffer.from([0, 255, 128, 13, 10, 1])
+  const firmware = { filename: 'fixture.swu', encoding: 'base64', size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), data: bytes.toString('base64') }
+  const upload = await command('updateFirmware', { value: firmware })
+  t.is(upload.status, 'SUCCESS')
+  t.alike(upload.result, { accepted: true, completed: false, mode: 'upload' })
+  t.alike(first.state.updates, [{ mode: 'ota' }, { mode: 'upload', filename: 'fixture.swu', size: bytes.length, sha256: firmware.sha256 }])
+  t.is(first.state.writeAttempts['/api/v1/system/update'], 2, 'OTA and upload each make one firmware write')
+  t.is((await pull('firmware_info')).os.version, 'changed-after-cached-read')
+
+  for (const [name, params, error] of [
+    ['downloadLogs', { lines: 0 }, 'ERR_LOGS_PARAMETERS_INVALID'],
+    ['setNetwork', { network: { dhcp: false } }, 'ERR_NETWORK_CONFIG_INVALID'],
+    ['updateFirmware', { firmware: { ...firmware, sha256: '0'.repeat(64) } }, 'ERR_FIRMWARE_PAYLOAD_INVALID']
+  ]) {
+    const before = first.state.requests.length
+    const result = await command(name, params)
+    t.is(result.status, 'FAILED')
+    t.is(result.error, error)
+    t.is(first.state.requests.length, before, `${name} rejects invalid parameters before device I/O`)
+  }
+
+  statusByPath['/api/v1/network'] = 503
+  const failedNetwork = await command('setNetwork', { network: { dhcp: true } })
+  t.is(failedNetwork.status, 'FAILED')
+  t.is(failedNetwork.error, 'ERR_HTTP_RESPONSE: 503')
+  delete statusByPath['/api/v1/network']
+  first.state.network.hostname = 'verified-after-failure'
+  t.is((await pull('device_info')).network.hostname, 'verified-after-failure', 'a failed network write also clears cached reads')
+  for (const status of [401, 409]) {
+    statusByPath['/api/v1/system/update'] = status
+    const before = first.state.writeAttempts['/api/v1/system/update']
+    const result = await command('updateFirmware')
+    t.is(result.status, 'FAILED')
+    t.is(result.error, status === 401 ? 'ERR_AUTHENTICATION_FAILED' : 'ERR_HTTP_RESPONSE: 409')
+    t.is(first.state.writeAttempts['/api/v1/system/update'], before + 1, 'firmware failures do not replay the write')
+  }
+  const disconnected = await command('updateFirmware', { firmware }, 'maint-2')
+  t.is(disconnected.status, 'FAILED')
+  t.is(disconnected.error, 'ERR_DEVICE_CONNECTION')
+  t.is(second.state.writeAttempts['/api/v1/system/update'], 1, 'an ambiguous upload is never replayed')
+  t.alike(second.state.updates, [])
+  const wire = JSON.stringify({ logs, configured, ota, upload, failedNetwork, disconnected })
+  for (const secret of ['test-password', 'fake-test-bearer', 'FAKE', 'mock-access-', 'mock-refresh-', firmware.data, firmware.sha256]) {
+    t.is(wire.includes(secret), false, `command results omit ${secret}`)
+  }
+})
 
 function temporaryStore (t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proto-host-'))
@@ -219,7 +333,7 @@ test('detail channels work over authorized HRPC with independent sources and saf
   t.alike((await pull('errors', 'detail-2')).payload.value, [])
 
   const metrics = await pull('metrics')
-  t.is(Object.keys(metrics.payload.metrics).length, 18)
+  t.is(Object.keys(metrics.payload.metrics).length, 22)
   t.ok(metrics.payload.metrics.snap.error, 'a snapshot failure stays isolated to its channel')
   t.alike(metrics.payload.metrics.errors, values.errors)
   t.alike(metrics.payload.metrics.firmware_info, values.firmware_info)

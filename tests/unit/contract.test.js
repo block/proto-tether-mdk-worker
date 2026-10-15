@@ -10,16 +10,21 @@ const WORKER_DIR = path.resolve(__dirname, '../..')
 
 test('contract loads every V2 handler and strips private paths', async (t) => {
   const loaded = loadContract(WORKER_DIR)
-  t.is(loaded.entries.telemetry.size, 18)
-  t.is(loaded.entries.commands.size, 5)
+  t.is(loaded.entries.telemetry.size, 22)
+  t.is(loaded.entries.commands.size, 8)
   t.is(loaded.contract.metadata.provider, 'proto')
   t.ok(loaded.entries.telemetry.has('health'))
   for (const [name, type] of [
     ['errors', 'array'], ['pools', 'array'], ['hashboards', 'array'],
-    ['device_info', 'object'], ['firmware_info', 'object']
+    ['device_info', 'object'], ['firmware_info', 'object'], ['psu_info', 'object'],
+    ['fans', 'array'], ['pool_url', 'string'], ['hashrate_history', 'object']
   ]) {
     t.ok(loaded.entries.telemetry.has(name), `contract loads ${name}`)
     t.is(loaded.publishedContract.capabilities.telemetry.find(entry => entry.name === name)?.type, type, `${name} has a discoverable result type`)
+  }
+
+  for (const name of ['downloadLogs', 'setNetwork', 'updateFirmware']) {
+    t.ok(loaded.entries.commands.has(name), `contract loads ${name}`)
   }
 
   const setPowerTarget = loaded.publishedContract.capabilities.commands.find(command => command.name === 'setPowerTarget')
@@ -68,6 +73,14 @@ test('contract loads every V2 handler and strips private paths', async (t) => {
     'ERR_POWER_TARGET_RESPONSE_INVALID',
     'ERR_TELEMETRY_RESPONSE_INVALID',
     'ERR_COOLING_RESPONSE_INVALID',
+    'ERR_PSUS_RESPONSE_INVALID',
+    'ERR_HASHRATE_DURATION_INVALID',
+    'ERR_HASHRATE_RESPONSE_INVALID',
+    'ERR_LOGS_PARAMETERS_INVALID',
+    'ERR_LOGS_RESPONSE_INVALID',
+    'ERR_NETWORK_CONFIG_INVALID',
+    'ERR_FIRMWARE_PAYLOAD_INVALID',
+    'ERR_FIRMWARE_RESPONSE_INVALID',
     'ERR_APPEND_ID_INVALID'
   ]) t.ok(loaded.publishedContract.capabilities.errors[error], `contract declares ${error}`)
 })
