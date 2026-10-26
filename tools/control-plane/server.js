@@ -47,7 +47,7 @@ function createControlPlane ({ client, deviceId = 'proto-r2-1' } = {}) {
         let size = 0
         for await (const chunk of req) {
           size += chunk.length
-          if (size > 16 * 1024 * 1024) return json(413, { error: 'Request exceeds the control plane limit of 16 MiB; the MDK transport may impose a smaller limit' })
+          if (size > 16 * 1024 * 1024) return json(413, { error: 'Request exceeds the development console limit of 16 MiB; the MDK transport may impose a smaller limit' })
           chunks.push(chunk)
         }
         const body = Buffer.concat(chunks).toString('utf8')
@@ -109,7 +109,7 @@ async function main () {
   }
   process.once('SIGINT', stop)
   process.once('SIGTERM', stop)
-  console.log(`Proto control plane: http://127.0.0.1:${server.address().port}`)
+  console.log(`Proto development console: http://127.0.0.1:${server.address().port}`)
 }
 
 module.exports = { createControlPlane }

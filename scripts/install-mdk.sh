@@ -12,7 +12,10 @@ else
     echo 'ERR_MDK_NPM_VERSION: MDK workspace installation requires npm 11.' >&2
     exit 1
   fi
-  # MDK >=0.9 installs from the root workspace. The worker runtime is enough
-  # for plugin tests and hosting; a Kernel host needs the full root install.
-  (cd "$mdk_repo" && npm ci --ignore-scripts --workspace @tetherto/mdk-worker --include-workspace-root=false)
+  # Install the runtime and the Kernel/client used by the integration suite.
+  (cd "$mdk_repo" && npm ci --ignore-scripts \
+    --workspace @tetherto/mdk-worker \
+    --workspace @tetherto/mdk-kernel \
+    --workspace @tetherto/mdk-client \
+    --include-workspace-root=false)
 fi

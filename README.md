@@ -27,7 +27,7 @@ git clone --branch v0.10.0 --depth 1 https://github.com/tetherto/mdk ../mdk
 npm run setup:mdk -- ../mdk
 ```
 
-The setup script supports both the minimum MDK revision's per-package installer and the root workspace introduced in MDK v0.9. For the workspace layout it installs only `@tetherto/mdk-worker` and its dependencies. To host a Kernel as well, run `npm ci` in the MDK repository root.
+The setup script supports both the minimum MDK revision's per-package installer and the root workspace introduced in MDK v0.9. For the workspace layout it installs the worker, Kernel, and client packages and their dependencies for hosting and integration tests.
 
 Start the bundled single-device host. Supply the address, password, and trusted Kernel transport keys through your environment or secret management:
 
@@ -115,15 +115,18 @@ Register the runtime's public key with an existing Kernel using `await kernel.re
 
 Use this bundled host for network access to rigs. It maps trusted keys into native MDK admission on newer releases and installs a peer firewall before listening on older releases. The adapter retains the inherited dispatch and device lifecycle, and CI verifies it against the supported runtime matrix.
 
-## Local control plane
+## Optional development console
 
-The bundled browser console connects directly to the authorized worker over MDK
-RPC. It supports every published telemetry channel and command without a Kernel,
-gateway, or site example. MDK's `full-site` example is
+The optional bundled development console connects directly to the authorized
+worker over MDK RPC. It exercises every published telemetry channel and command
+without a Kernel, Gateway, or site app, and proves that direct authorized worker
+RPC works. The actual MDK site UI uses the Kernel, Gateway, and app integration;
+this console does not verify that chain. MDK's `full-site` example is
 [deprecated](https://github.com/tetherto/mdk/pull/58#issuecomment-6361638817);
-its site API is no longer a dependency. Follow the [control plane guide](tools/control-plane/README.md)
+its site API is no longer a dependency. Follow the [development console guide](tools/control-plane/README.md)
 to create a client identity, authorize it in the worker host, and open the console
-at <http://127.0.0.1:3041>. Commands require a request preview and explicit confirmation.
+with `npm run console` at <http://127.0.0.1:3041>. Commands require a request
+preview and explicit confirmation. `npm run control` remains an alias.
 
 ## Test
 
@@ -146,6 +149,14 @@ MDK_REPO=../mdk npm test
 
 `MDK_REPO` defaults to `/tmp/mdk-latest` when unset. Individual suites are
 available as `npm run lint`, `npm run test:unit`, and `npm run test:integration`.
+Run `MDK_REPO=../mdk npm run test:kernel` for the separate mock-only Kernel-chain
+check. It verifies worker registration reaches `READY`, SDK telemetry and
+capabilities, validation before worker dispatch, and command results moving from
+queued to terminal state. On older MDK revisions, terminal results are observed
+through the in-process Kernel `command:done` event; modern revisions query the
+SDK's `getCommandStatus`. This check uses a mock rig and does not exercise the
+browser site UI or hardware.
+
 CI tests the minimum supported MDK commit `633ee07905a6af1d9e0c44b770df09eb0ac432b4`, pinned v0.10.0 (`7f5cae88f67cd0ebedaa325778f9209135de1b8f`), and upstream `main`. It runs on pull requests, pushes to `main`, manual dispatch, and weekly on Mondays at 06:00 UTC. The integration suite exercises real HRPC over a local DHT test network, persistent identity across restart, and host shutdown, in addition to in-process dispatch and mock HTTP behavior.
 
 Run the local mock for development:

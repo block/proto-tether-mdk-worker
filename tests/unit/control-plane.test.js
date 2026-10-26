@@ -2,7 +2,7 @@
 
 const test = require('brittle')
 
-test('control-plane forms preserve false and zero, omit optional blanks and parse structured parameters', async t => {
+test('development console forms preserve false and zero, omit optional blanks and parse structured parameters', async t => {
   const { parseParams } = await import('../../tools/control-plane/public/model.mjs')
   const command = {
     params: [
@@ -22,7 +22,7 @@ test('control-plane forms preserve false and zero, omit optional blanks and pars
   t.exception(() => parseParams({ params: [{ name: 'mode', type: 'string', enum: ['normal', 'sleep'], required: true }] }, { mode: 'high' }))
 })
 
-test('control plane distinguishes HTTP success from MDK command failure and redacts previews', async t => {
+test('development console distinguishes HTTP success from MDK command failure and redacts previews', async t => {
   const { commandResult, preview } = await import('../../tools/control-plane/public/model.mjs')
   t.is(commandResult({ status: 'SUCCESS', result: { success: true } }, 200).ok, true)
   t.is(commandResult({ status: 'FAILED', error: 'ERR_POWER_TARGET_WRITE_UNVERIFIED' }, 200).ok, false)

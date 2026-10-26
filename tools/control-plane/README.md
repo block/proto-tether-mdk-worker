@@ -1,9 +1,18 @@
-# Local Proto control plane
+# Optional Proto development console
 
-A browser console for exercising the worker directly over authorized MDK RPC.
+A development console for exercising the worker directly over authorized MDK RPC.
 The channel list and command forms come from the published worker contract. No
-frontend build, Kernel, gateway, or site example is needed; use Node.js 24 or later
+frontend build, Kernel, Gateway, or site app is needed; use Node.js 24 or later
 and install MDK as described in the repository README.
+
+This console is optional. It proves direct authorized worker RPC; the actual MDK
+site UI uses the Kernel, Gateway, and app integration. Run
+`MDK_REPO=../mdk npm run test:kernel` separately to check worker registration reaches
+`READY`, SDK telemetry and capabilities, validation before worker dispatch, and
+queued-to-terminal command results against a mock rig. Older MDK revisions expose
+terminal results through the in-process Kernel `command:done` event; modern
+revisions query the SDK's `getCommandStatus`. That check does not exercise the
+browser site UI or hardware.
 
 MDK's `full-site` example is [deprecated](https://github.com/tetherto/mdk/pull/58#issuecomment-6361638817).
 The current [MVP site](https://github.com/tetherto/mdk/tree/main/examples/mvp-site)
@@ -39,13 +48,15 @@ Copy `publicKey` from the host's startup JSON. Back in the console terminal:
 
 ```sh
 export MDK_WORKER_KEY='<worker publicKey>'
-npm run control
+npm run console
 ```
 
 Open <http://127.0.0.1:3041>. Defaults match the bundled host:
 `PROTO_WORKER_ID=proto-worker` and `PROTO_DEVICE_ID=proto-r2-1`. Set the same IDs
 in both terminals when overriding them. `CONTROL_PORT` changes the console's HTTP
 port. The server binds to `127.0.0.1`; rig credentials stay in the worker host.
+`npm run control` remains an alias for `npm run console`. Existing identity paths
+under `store/control-plane/` remain valid.
 
 ## Use it
 

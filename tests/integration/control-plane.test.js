@@ -22,7 +22,7 @@ test('local control plane serves its UI and forwards worker reads and commands w
   const base = `http://127.0.0.1:${server.address().port}`
   const page = await fetch(base)
   t.is(page.status, 200)
-  t.ok((await page.text()).includes('Proto control plane'))
+  t.ok((await page.text()).includes('Proto development console'))
   await fetch(`${base}/api/telemetry/asic_stats`)
   t.alike(seen.at(-1), { deviceId: 'proto-r2-1', type: 'asic_stats' })
   await fetch(`${base}/api/capabilities`)
