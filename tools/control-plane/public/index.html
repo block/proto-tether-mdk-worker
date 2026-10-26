@@ -25,13 +25,13 @@
           <p class="eyebrow">LOCAL WORKER CONSOLE</p>
           <h1>Inspect. Command. Verify.</h1>
           <p class="muted">
-            Every published capability, connected through your MDK gateway.
+            Every published capability, connected directly to your MDK worker.
           </p>
         </div>
         <div class="device">
           <span class="muted">TARGET DEVICE</span
           ><strong id="device-id">—</strong
-          ><span id="gateway-url" class="muted"></span>
+          ><span id="worker-key" class="muted"></span>
         </div>
       </section>
       <section
@@ -146,9 +146,9 @@
           Forms and channel lists are generated from this live contract.
         </p>
         <pre id="contract-output"></pre>
-        <h3>Worker status</h3>
-        <button id="read-workers">Read worker status</button>
-        <pre id="workers-output"></pre>
+        <h3>Worker identity</h3>
+        <button id="read-identity">Read worker identity</button>
+        <pre id="identity-output"></pre>
       </section>
       <footer>
         <span>PROTO / MDK</span

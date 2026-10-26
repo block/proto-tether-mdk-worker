@@ -8,10 +8,12 @@ const { createRequire } = require('node:module')
 const { spawn } = require('node:child_process')
 const test = require('brittle')
 const { createServer } = require('../../mock/server')
+const { createControlPlane } = require('../../tools/control-plane/server')
 
 const MDK_REPO = path.resolve(process.env.MDK_REPO || '/tmp/mdk-latest')
 process.env.MDK_REPO = MDK_REPO
 const { startProtoWorker } = require('../../host')
+const { createWorkerClient, readClientKeyPair } = require('../../tools/control-plane/worker-client')
 const requireFromRuntime = createRequire(path.join(MDK_REPO, 'backend/core/mdk-worker/package.json'))
 const createTestnet = requireFromRuntime('hyperdht/testnet')
 const HyperswarmRPC = requireFromRuntime('@hyperswarm/rpc')
@@ -20,6 +22,71 @@ const DHT = requireFromRuntime('hyperdht')
 const { build, serialize, deserialize } = require(path.join(MDK_REPO, 'backend/core/kernel/lib/protocol/envelope'))
 const WORKER_DIR = path.resolve(__dirname, '../..')
 const RPC_TIMEOUT = 10000
+
+test('console runner exits and closes RPC resources after invalid startup configuration', { timeout: 10000 }, async t => {
+  const seedFile = path.join(temporaryStore(t), 'console.seed')
+  fs.writeFileSync(seedFile, randomBytes(32), { mode: 0o600 })
+  for (const invalid of [{ PROTO_DEVICE_ID: ' ', CONTROL_PORT: '3041' }, { PROTO_DEVICE_ID: 'proto-r2-1', CONTROL_PORT: 'invalid' }]) {
+    const child = spawn(process.execPath, [path.join(WORKER_DIR, 'tools/control-plane/server.js')], {
+      env: { ...process.env, MDK_CLIENT_SEED_FILE: seedFile, MDK_WORKER_KEY: 'ab'.repeat(32), ...invalid },
+      timeout: 3000
+    })
+    let stderr = ''
+    child.stderr.on('data', chunk => { stderr += chunk })
+    const exited = await new Promise((resolve, reject) => {
+      child.once('error', reject)
+      child.once('close', (code, signal) => resolve({ code, signal }))
+    })
+    t.alike(exited, { code: 1, signal: null }, 'startup error exits without waiting for the subprocess timeout')
+    t.ok(stderr.startsWith('ERR_CONTROL_STARTUP_FAILED:'))
+  }
+})
+
+test('standalone console exercises the real authorized worker without a site gateway', { timeout: 60000 }, async t => {
+  const testnet = await createTestnet(3, t.teardown)
+  const mock = createServer({ disconnectPaths: ['/api/v1/system/update'] })
+  t.teardown(() => mock.close())
+  const address = await mock.ready
+  const seedFile = path.join(temporaryStore(t), 'console.seed')
+  fs.writeFileSync(seedFile, randomBytes(32), { mode: 0o600 })
+  const keyPair = readClientKeyPair(seedFile)
+  t.ok(keyPair.publicKey.equals(readClientKeyPair(seedFile).publicKey), 'client identity persists across restarts')
+  fs.chmodSync(seedFile, 0o644)
+  t.exception(() => readClientKeyPair(seedFile), /private 32-byte file/, 'publicly readable client seeds are rejected')
+  fs.chmodSync(seedFile, 0o600)
+  const worker = await startProtoWorker({
+    workerId: 'proto-worker',
+    storeDir: temporaryStore(t),
+    bootstrap: testnet.bootstrap,
+    trustedKernelKeys: [keyPair.publicKey],
+    devices: [{ deviceId: 'proto-r2-1', config: { address: '127.0.0.1', port: address.port, password: 'test-password' } }]
+  })
+  t.teardown(() => worker.stop())
+  const client = createWorkerClient({ publicKey: worker.runtime.getPublicKey().toString('hex'), keyPair, bootstrap: testnet.bootstrap })
+  t.teardown(() => client.close())
+  const server = createControlPlane({ client })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.teardown(() => new Promise(resolve => server.close(resolve)))
+  const base = `http://127.0.0.1:${server.address().port}`
+  const read = async route => (await fetch(`${base}/api/${route}`)).json()
+  t.is((await read('capabilities')).capabilities.telemetry.length, 22)
+  t.alike((await read('identity')).devices, [{ deviceId: 'proto-r2-1' }])
+  t.is((await read('telemetry/hashrate_avg')).value, 95.5)
+  const command = async (name, params) => fetch(`${base}/api/command`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', origin: base },
+    body: JSON.stringify({ command: name, params })
+  })
+  t.is((await (await command('setLED', { enabled: true })).json()).status, 'SUCCESS')
+  t.is(mock.state.led, true)
+  t.is((await (await command('setPowerPreset', { preset: 'invalid' })).json()).status, 'FAILED')
+  const disconnected = await command('updateFirmware', {})
+  t.is(disconnected.status, 200)
+  const failed = await disconnected.json()
+  t.is(failed.status, 'FAILED', 'worker failure stays a failure even with HTTP 200')
+  t.is(failed.error, 'ERR_DEVICE_CONNECTION')
+  t.is(mock.state.writeAttempts['/api/v1/system/update'], 1, 'ambiguous commands are never replayed')
+})
 
 test('maintenance commands work over authorized HRPC with safe results and no firmware replay', { timeout: 60000 }, async (t) => {
   const testnet = await createTestnet(3, t.teardown)
@@ -98,7 +165,7 @@ test('maintenance commands work over authorized HRPC with safe results and no fi
   t.is((await pull('firmware_info')).os.version, 'changed-after-cached-read')
 
   for (const [name, params, error] of [
-    ['downloadLogs', { lines: 0 }, 'ERR_LOGS_PARAMETERS_INVALID'],
+    ['downloadLogs', { lines: 0 }, worker.runtime._commandParams instanceof Map ? 'ERR_PARAM_RANGE: lines below min 1' : 'ERR_LOGS_PARAMETERS_INVALID'],
     ['setNetwork', { network: { dhcp: false } }, 'ERR_NETWORK_CONFIG_INVALID'],
     ['updateFirmware', { firmware: { ...firmware, sha256: '0'.repeat(64) } }, 'ERR_FIRMWARE_PAYLOAD_INVALID']
   ]) {
@@ -487,7 +554,7 @@ test('startup failure releases the store lock; an existing crash lock fails clos
   const lockPath = path.join(options.storeDir, '.proto-worker.lock')
   const seedPath = path.join(options.storeDir, 'seedDht')
   fs.mkdirSync(seedPath)
-  await t.exception(startProtoWorker(options), { code: 'EISDIR' }, 'seed read failure triggers startup cleanup')
+  await t.exception(startProtoWorker(options), /\b(EISDIR|ERR_SEED_FILE_INVALID):/, 'seed read failure triggers startup cleanup')
   t.is(fs.existsSync(lockPath), false, 'failed startup releases its acquired lock')
   fs.rmdirSync(seedPath)
   fs.writeFileSync(lockPath, 'stale owner', { mode: 0o600 })

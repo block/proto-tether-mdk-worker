@@ -11,11 +11,8 @@ const ASSETS = {
   '/styles.css': ['styles.css', 'text/css']
 }
 
-function createControlPlane ({ gateway = 'http://127.0.0.1:3007', deviceId = 'proto-rig-1' } = {}) {
-  const upstream = new URL(gateway)
-  if (!['http:', 'https:'].includes(upstream.protocol) || !['127.0.0.1', 'localhost', '[::1]'].includes(upstream.hostname) || upstream.username || upstream.password) {
-    throw new Error('Gateway must be a loopback HTTP URL without credentials')
-  }
+function createControlPlane ({ client, deviceId = 'proto-r2-1' } = {}) {
+  if (!client) throw new Error('Worker client is required')
   if (typeof deviceId !== 'string' || !deviceId.trim()) throw new Error('Device ID is required')
   const server = http.createServer(async (req, res) => {
     const port = server.address().port
@@ -36,13 +33,12 @@ function createControlPlane ({ gateway = 'http://127.0.0.1:3007', deviceId = 'pr
         res.writeHead(200, { 'content-type': `${type}; charset=utf-8`, 'cache-control': 'no-store' })
         return res.end(content)
       }
-      if (req.method === 'GET' && url.pathname === '/api/config') return json(200, { gateway: upstream.origin, deviceId })
-      let target
-      let body
-      if (req.method === 'GET' && url.pathname === '/api/capabilities') target = '/site/capabilities'
-      else if (req.method === 'GET' && url.pathname === '/api/workers') target = '/site/workers'
+      if (req.method === 'GET' && url.pathname === '/api/config') return json(200, { endpoint: client.endpoint, deviceId })
+      let result
+      if (req.method === 'GET' && url.pathname === '/api/capabilities') result = await client.capabilities()
+      else if (req.method === 'GET' && url.pathname === '/api/identity') result = await client.identity()
       else if (req.method === 'GET' && /^\/api\/telemetry\/[a-zA-Z0-9_-]+$/.test(url.pathname)) {
-        target = `/site/devices/${encodeURIComponent(deviceId)}/telemetry/${url.pathname.split('/').at(-1)}`
+        result = await client.telemetry(deviceId, url.pathname.split('/').at(-1))
       } else if (req.method === 'POST' && url.pathname === '/api/command') {
         if (req.headers.origin && !hosts.some(host => req.headers.origin === `http://${host}`)) return json(403, { error: 'Cross-origin commands are not accepted' })
         if (req.headers['sec-fetch-site'] === 'cross-site') return json(403, { error: 'Cross-site commands are not accepted' })
@@ -51,27 +47,18 @@ function createControlPlane ({ gateway = 'http://127.0.0.1:3007', deviceId = 'pr
         let size = 0
         for await (const chunk of req) {
           size += chunk.length
-          if (size > 16 * 1024 * 1024) return json(413, { error: 'Request exceeds the control plane limit of 16 MiB; the gateway may impose a smaller limit' })
+          if (size > 16 * 1024 * 1024) return json(413, { error: 'Request exceeds the control plane limit of 16 MiB; the MDK transport may impose a smaller limit' })
           chunks.push(chunk)
         }
-        body = Buffer.concat(chunks).toString('utf8')
+        const body = Buffer.concat(chunks).toString('utf8')
         let command
         try { command = JSON.parse(body) } catch { return json(400, { error: 'Invalid command JSON' }) }
         if (!command || typeof command.command !== 'string' || !command.params || typeof command.params !== 'object' || Array.isArray(command.params)) return json(400, { error: 'Expected {command, params: {...}}' })
-        target = `/site/miners/${encodeURIComponent(deviceId)}/command`
+        result = await client.command(deviceId, command.command, command.params)
       } else return json(404, { error: 'Route not found' })
-      const response = await fetch(new URL(target, upstream), {
-        method: req.method,
-        headers: body ? { 'content-type': 'application/json' } : {},
-        body,
-        redirect: 'error',
-        signal: AbortSignal.timeout(body ? 30 * 60 * 1000 : 30000)
-      })
-      const content = await response.text()
-      res.writeHead(response.status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
-      res.end(content)
+      json(200, result)
     } catch {
-      json(502, { error: bodyWasCommand(req) ? 'Gateway request failed. Command outcome is unknown; read device state before another write. This request was not retried.' : 'Gateway unavailable. Start the local MDK stack, then reconnect.' })
+      json(502, { error: bodyWasCommand(req) ? 'Worker request failed. Command outcome is unknown; read device state before another write. This request was not retried.' : 'Worker unavailable. Check the worker key and trusted client identity, then reconnect.' })
     }
   })
   return server
@@ -82,10 +69,47 @@ function bodyWasCommand (req) {
 }
 
 if (require.main === module) {
+  main().catch(() => { console.error('ERR_CONTROL_STARTUP_FAILED: check MDK_REPO, MDK_CLIENT_SEED_FILE and MDK_WORKER_KEY'); process.exitCode = 1 })
+}
+
+async function main () {
+  const { createWorkerClient, readClientKeyPair } = require('./worker-client')
+  const keyPair = readClientKeyPair(process.env.MDK_CLIENT_SEED_FILE)
+  if (process.argv.includes('--client-key')) {
+    console.log(keyPair.publicKey.toString('hex'))
+    return
+  }
   const port = Number(process.env.CONTROL_PORT || 3041)
-  const server = createControlPlane({ gateway: process.env.MDK_GATEWAY_URL, deviceId: process.env.MDK_DEVICE_ID })
-  server.on('error', error => { console.error(error.message); process.exitCode = 1 })
-  server.listen(port, '127.0.0.1', () => console.log(`Proto control plane: http://127.0.0.1:${server.address().port}`))
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid CONTROL_PORT')
+  const client = createWorkerClient({ publicKey: process.env.MDK_WORKER_KEY, workerId: process.env.PROTO_WORKER_ID, keyPair })
+  let server
+  try {
+    server = createControlPlane({ client, deviceId: process.env.PROTO_DEVICE_ID })
+    await new Promise((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(port, '127.0.0.1', () => {
+        server.removeListener('error', reject)
+        resolve()
+      })
+    })
+  } catch (error) {
+    await client.close()
+    throw error
+  }
+  let stopping
+  const stop = () => {
+    if (!stopping) {
+      stopping = (async () => {
+        server.closeAllConnections()
+        await new Promise(resolve => server.close(resolve))
+        await client.close()
+      })().catch(() => { console.error('ERR_CONTROL_SHUTDOWN_FAILED'); process.exitCode = 1 })
+    }
+    return stopping
+  }
+  process.once('SIGINT', stop)
+  process.once('SIGTERM', stop)
+  console.log(`Proto control plane: http://127.0.0.1:${server.address().port}`)
 }
 
 module.exports = { createControlPlane }

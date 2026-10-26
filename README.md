@@ -113,16 +113,17 @@ Run this example with `MDK_REPO` pointing to the checkout. Alternatively, instal
 
 Register the runtime's public key with an existing Kernel using `await kernel.registerWorker(worker.runtime.getPublicKey())`, or configure the same discovery topic on both processes. Registration and discovery do not authorize inbound peers; the worker's `trustedKernelKeys` must include that Kernel's outbound transport identity. For a shared process, pass `[kernel.hrpcListener.getDht().defaultKeyPair.publicKey]` after starting Kernel. The option accepts an array of 64-character hex strings or 32-byte Buffers. Keep `storeDir` on persistent storage to preserve the worker public key across restarts. A new seed directory creates a new identity. The host helper always loads this repository's contract directory and requires a non-empty `storeDir`.
 
-Use this bundled host for network access to rigs. It adapts MDK transport startup to install a peer firewall before listening; instantiating upstream `WorkerRuntimeV2` directly does not enforce this allowlist. The adapter retains the inherited dispatch and device lifecycle, and CI verifies it against the supported runtime matrix.
+Use this bundled host for network access to rigs. It maps trusted keys into native MDK admission on newer releases and installs a peer firewall before listening on older releases. The adapter retains the inherited dispatch and device lifecycle, and CI verifies it against the supported runtime matrix.
 
 ## Local control plane
 
-With an MDK gateway running, use `npm run control` and open
-<http://127.0.0.1:3041> to inspect every published telemetry channel and exercise
-commands through generated forms. Defaults target `proto-rig-1` through the
-gateway at `http://127.0.0.1:3007`. Commands require a request preview and explicit
-confirmation. See the [control plane guide](tools/control-plane/README.md) for
-configuration, request history, and firmware upload limits.
+The bundled browser console connects directly to the authorized worker over MDK
+RPC. It supports every published telemetry channel and command without a Kernel,
+gateway, or site example. MDK's `full-site` example is
+[deprecated](https://github.com/tetherto/mdk/pull/58#issuecomment-6361638817);
+its site API is no longer a dependency. Follow the [control plane guide](tools/control-plane/README.md)
+to create a client identity, authorize it in the worker host, and open the console
+at <http://127.0.0.1:3041>. Commands require a request preview and explicit confirmation.
 
 ## Test
 

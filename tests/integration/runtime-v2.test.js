@@ -87,6 +87,7 @@ test('WorkerRuntimeV2 keeps device state isolated and publishes clean envelopes'
 
   const runtime = new WorkerRuntimeV2(WORKER_DIR, {
     workerId: 'proto-test',
+    allowedKeys: ['ab'.repeat(32)],
     env: { bearerToken: 'synthetic-env-bearer-secret' },
     config: { refreshToken: 'synthetic-config-refresh-secret', url: 'https://secret.invalid' },
     devices: [
@@ -212,6 +213,7 @@ test('native performance policies and min/max power presets preserve independent
   Object.assign(first.state.target, { balance_bays: true, hash_on_disconnect: true })
   const runtime = new WorkerRuntimeV2(WORKER_DIR, {
     workerId: 'power-worker',
+    allowedKeys: ['ab'.repeat(32)],
     devices: [
       { deviceId: 'power-1', config: { address: '127.0.0.1', port: one.port, password: 'test-password', cacheMs: 5000 } },
       { deviceId: 'power-2', config: { address: '127.0.0.1', port: two.port, password: 'test-password', cacheMs: 5000 } }
@@ -247,8 +249,9 @@ test('native performance policies and min/max power presets preserve independent
     t.is(first.state.mining.status, 'Mining', 'target controls do not start or stop mining')
     t.is(second.state.target.power_target_watts, 3300, 'writes remain device-local')
     const before = first.state.requests.length
-    t.is((await command('setPowerPreset', { preset: 'high' })).error, 'ERR_POWER_PRESET_INVALID')
-    t.is((await command('setPerformanceMode', { mode: 'efficiency' })).error, 'ERR_PERFORMANCE_MODE_INVALID')
+    const validatesParams = runtime._commandParams instanceof Map
+    t.is((await command('setPowerPreset', { preset: 'high' })).error, validatesParams ? 'ERR_PARAM_ENUM: preset' : 'ERR_POWER_PRESET_INVALID')
+    t.is((await command('setPerformanceMode', { mode: 'efficiency' })).error, validatesParams ? 'ERR_PARAM_ENUM: mode' : 'ERR_PERFORMANCE_MODE_INVALID')
     t.is(first.state.requests.length, before, 'invalid parameters do not reach the device')
     second.state.mining.status = 'Stopped'
     t.is((await command('setPerformanceMode', { mode: 'Efficiency' }, 'power-2')).status, 'SUCCESS')
@@ -272,6 +275,7 @@ test('target echo mismatches produce FAILED command results without retrying wri
   })
   const runtime = new WorkerRuntimeV2(WORKER_DIR, {
     workerId: 'unverified-power-worker',
+    allowedKeys: ['ab'.repeat(32)],
     devices: [{ deviceId: 'power-1', config: { address: '127.0.0.1', port: address.port, password: 'test-password' } }]
   })
   cleanup.add(() => runtime.stop())
@@ -305,6 +309,7 @@ test('health derives safe device state without exposing failures', async (t) => 
 
   const runtime = new WorkerRuntimeV2(WORKER_DIR, {
     workerId: 'proto-test',
+    allowedKeys: ['ab'.repeat(32)],
     devices: [
       {
         deviceId: 'proto-health',
@@ -375,6 +380,7 @@ test('psu_info is discoverable and reports isolated PSU reads and errors through
   }
   const runtime = new WorkerRuntimeV2(WORKER_DIR, {
     workerId: 'proto-test',
+    allowedKeys: ['ab'.repeat(32)],
     devices: [
       { deviceId: 'psu-1', config: { address: '127.0.0.1', port: firstAddress.port, password: 'test-password', cacheMs: 0 } },
       { deviceId: 'psu-2', config: { address: '127.0.0.1', port: secondAddress.port, password: 'test-password', cacheMs: 0 } }
@@ -431,6 +437,7 @@ test('current diagnostics support runtime discovery and independent failures', a
   second.state.pools = []
   const runtime = new WorkerRuntimeV2(WORKER_DIR, {
     workerId: 'proto-test',
+    allowedKeys: ['ab'.repeat(32)],
     devices: [
       { deviceId: 'diag-1', config: { address: '127.0.0.1', port: firstAddress.port, password: 'test-password', cacheMs: 5000 } },
       { deviceId: 'diag-2', config: { address: '127.0.0.1', port: secondAddress.port, password: 'test-password', cacheMs: 0 } }

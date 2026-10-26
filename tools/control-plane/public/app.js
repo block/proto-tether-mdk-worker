@@ -16,7 +16,7 @@ async function request (url, options) {
   const text = await response.text()
   let body
   try { body = JSON.parse(text) } catch { body = { error: text || `HTTP ${response.status}` } }
-  if (body === null || typeof body !== 'object') body = { error: 'Gateway returned an unexpected JSON response', value: body }
+  if (body === null || typeof body !== 'object') body = { error: 'Worker returned an unexpected JSON response', value: body }
   return { body, httpStatus: response.status }
 }
 
@@ -221,7 +221,7 @@ function parameterInput (parameter) {
   field.append(input)
   if (parameter.type === 'object') field.append(element('span', 'Enter a JSON object or array. Leave optional fields blank to omit them.', 'hint'))
   if (parameter.name === 'firmware') {
-    field.append(element('span', 'Leave blank for OTA, or choose a .swu file to prepare its size, SHA-256 and base64 payload. Gateway and MDK transport size limits still apply.', 'hint'))
+    field.append(element('span', 'Leave blank for OTA, or choose a .swu file to prepare its size, SHA-256 and base64 payload. MDK transport size limits still apply.', 'hint'))
     const fileInput = element('input')
     fileInput.type = 'file'
     fileInput.accept = '.swu'
@@ -323,8 +323,8 @@ async function connect () {
     state.config = requireSuccess(configResult)
     state.contract = requireSuccess(contractResult)
     $('#device-id').textContent = state.config.deviceId
-    $('#gateway-url').textContent = state.config.gateway
-    $('#connection').textContent = 'MDK gateway connected'
+    $('#worker-key').textContent = state.config.endpoint
+    $('#connection').textContent = 'MDK worker connected'
     $('#connection-dot').classList.add('connected')
     $('#telemetry-count').textContent = state.contract.capabilities.telemetry.length
     $('#command-count').textContent = state.contract.capabilities.commands.length
@@ -336,7 +336,7 @@ async function connect () {
     const snap = channels.find(channel => channel.name === 'snap')
     if (snap) await readChannel(snap)
   } catch (error) {
-    $('#connection').textContent = 'Gateway unavailable'
+    $('#connection').textContent = 'Worker unavailable'
     $('#read-channel').disabled = true
     $('#review-command').disabled = true
     setError('#global-error', error.message)
@@ -358,7 +358,7 @@ $('#command-form').addEventListener('submit', event => {
     const values = Object.fromEntries(new FormData(event.target))
     state.pending = { command: state.command.name, params: parseParams(state.command, values) }
     $('#confirm-title').textContent = `Send ${state.command.name}?`
-    $('#confirm-target').textContent = `Device: ${state.config.deviceId} · ${state.config.gateway}`
+    $('#confirm-target').textContent = `Device: ${state.config.deviceId} · ${state.config.endpoint}`
     $('#confirm-payload').textContent = preview(state.pending)
     $('#confirm-dialog').returnValue = ''
     $('#confirm-dialog').showModal()
@@ -369,12 +369,12 @@ $('#confirm-dialog').addEventListener('close', () => {
   state.pending = null
   if ($('#confirm-dialog').returnValue === 'send' && payload && !state.sending) sendCommand(payload)
 })
-$('#read-workers').addEventListener('click', async () => {
+$('#read-identity').addEventListener('click', async () => {
   try {
-    const result = await request('/api/workers')
-    $('#workers-output').textContent = preview(result.body)
-    record('read', 'workers', null, result.body, result.httpStatus)
-  } catch (error) { $('#workers-output').textContent = error.message }
+    const result = await request('/api/identity')
+    $('#identity-output').textContent = preview(result.body)
+    record('read', 'identity', null, result.body, result.httpStatus)
+  } catch (error) { $('#identity-output').textContent = error.message }
 })
 renderSummary(null)
 connect()
