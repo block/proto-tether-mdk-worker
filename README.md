@@ -27,7 +27,7 @@ git clone --branch v0.10.0 --depth 1 https://github.com/tetherto/mdk ../mdk
 npm run setup:mdk -- ../mdk
 ```
 
-The setup script supports both the minimum MDK revision's per-package installer and the root workspace introduced in MDK v0.9. For the workspace layout it installs only `@tetherto/mdk-worker` and its dependencies. To host a Kernel as well, run `npm ci` in the MDK repository root.
+The setup script supports both the minimum MDK revision's per-package installer and the root workspace introduced in MDK v0.9. For the workspace layout it installs the worker, Kernel, and client packages and their dependencies for hosting and integration tests.
 
 Start the bundled single-device host. Supply the address, password, and trusted Kernel transport keys through your environment or secret management:
 
@@ -113,7 +113,20 @@ Run this example with `MDK_REPO` pointing to the checkout. Alternatively, instal
 
 Register the runtime's public key with an existing Kernel using `await kernel.registerWorker(worker.runtime.getPublicKey())`, or configure the same discovery topic on both processes. Registration and discovery do not authorize inbound peers; the worker's `trustedKernelKeys` must include that Kernel's outbound transport identity. For a shared process, pass `[kernel.hrpcListener.getDht().defaultKeyPair.publicKey]` after starting Kernel. The option accepts an array of 64-character hex strings or 32-byte Buffers. Keep `storeDir` on persistent storage to preserve the worker public key across restarts. A new seed directory creates a new identity. The host helper always loads this repository's contract directory and requires a non-empty `storeDir`.
 
-Use this bundled host for network access to rigs. It adapts MDK transport startup to install a peer firewall before listening; instantiating upstream `WorkerRuntimeV2` directly does not enforce this allowlist. The adapter retains the inherited dispatch and device lifecycle, and CI verifies it against the supported runtime matrix.
+Use this bundled host for network access to rigs. It maps trusted keys into native MDK admission on newer releases and installs a peer firewall before listening on older releases. On those older releases, including the minimum revision and pinned v0.10.0, instantiating upstream `WorkerRuntimeV2` directly does not enforce an allowlist. The adapter retains the inherited dispatch and device lifecycle, and CI verifies it against the supported runtime matrix.
+
+## Optional development console
+
+The optional bundled development console connects directly to the authorized
+worker over MDK RPC. It exercises every published telemetry channel and command
+without a Kernel, Gateway, or site app, and proves that direct authorized worker
+RPC works. The actual MDK site UI uses the Kernel, Gateway, and app integration;
+this console does not verify that chain. MDK's `full-site` example is
+[deprecated](https://github.com/tetherto/mdk/pull/58#issuecomment-6361638817);
+its site API is no longer a dependency. Follow the [development console guide](tools/control-plane/README.md)
+to create a client identity, authorize it in the worker host, and open the console
+with `npm run console`. Open the tokenized URL printed at startup (the default
+port is `3041`). Commands require a request preview and explicit confirmation. `npm run control` remains an alias.
 
 ## Test
 
@@ -136,6 +149,14 @@ MDK_REPO=../mdk npm test
 
 `MDK_REPO` defaults to `/tmp/mdk-latest` when unset. Individual suites are
 available as `npm run lint`, `npm run test:unit`, and `npm run test:integration`.
+Run `MDK_REPO=../mdk npm run test:kernel` for the separate mock-only Kernel-chain
+check. It verifies worker registration reaches `READY`, SDK telemetry and
+capabilities, validation before worker dispatch, and command results moving from
+queued to terminal state. On older MDK revisions, terminal results are observed
+through the in-process Kernel `command:done` event; modern revisions query the
+SDK's `getCommandStatus`. This check uses a mock rig and does not exercise the
+browser site UI or hardware.
+
 CI tests the minimum supported MDK commit `633ee07905a6af1d9e0c44b770df09eb0ac432b4`, pinned v0.10.0 (`7f5cae88f67cd0ebedaa325778f9209135de1b8f`), and upstream `main`. It runs on pull requests, pushes to `main`, manual dispatch, and weekly on Mondays at 06:00 UTC. The integration suite exercises real HRPC over a local DHT test network, persistent identity across restart, and host shutdown, in addition to in-process dispatch and mock HTTP behavior.
 
 Run the local mock for development:

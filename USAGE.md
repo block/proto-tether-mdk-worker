@@ -145,6 +145,8 @@ For firmware upload, `filename` must be a basename ending in `.swu`. `size` is a
 
 OTA acceptance requires HTTP `202`; upload acceptance requires HTTP `200`. Other successful status codes report `ERR_FIRMWARE_RESPONSE_INVALID` and require device verification before another attempt. Log parameter/response validation uses `ERR_LOGS_PARAMETERS_INVALID` and `ERR_LOGS_RESPONSE_INVALID`.
 
+Newer MDK runtimes validate declared parameter types, enums and ranges before invoking handlers. Those rejections return `ERR_PARAM_*` errors; older runtimes reach the worker-specific validation errors described above. Both paths reject invalid parameters before device I/O.
+
 Each pool entry uses:
 
 | Field | Required | Description |

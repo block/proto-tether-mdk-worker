@@ -12,6 +12,7 @@
     "mock/",
     "scripts/",
     "host/",
+    "tools/control-plane/",
     "mdk-contract.json",
     "smoke.config.js",
     "README.md",
@@ -24,11 +25,14 @@
     "lint:fix": "standard --fix",
     "mock": "node scripts/run-mock.js",
     "host": "node host/run.js",
+    "console": "node tools/control-plane/server.js",
+    "control": "npm run console",
     "setup:mdk": "bash scripts/install-mdk.sh",
     "live:readonly": "node scripts/test-live-readonly.js",
     "test": "npm run lint && npm run test:unit && npm run test:integration",
     "test:unit": "NODE_ENV=test brittle tests/unit/*.test.js",
     "test:integration": "NODE_ENV=test brittle tests/integration/*.test.js",
+    "test:kernel": "NODE_ENV=test brittle tests/integration/kernel.test.js",
     "test:coverage": "NODE_ENV=test brittle --coverage 'tests/**/*.test.js'"
   },
   "devDependencies": {

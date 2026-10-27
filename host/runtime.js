@@ -18,15 +18,14 @@ const { serialize, deserialize } = requireFromRuntime('../kernel/lib/protocol/en
 class AuthorizedWorkerRuntime extends WorkerRuntimeV2 {
   constructor (dir, options) {
     const trustedKeys = validateTrustedKeys(options.trustedKernelKeys)
-    super(dir, options)
+    super(dir, { ...options, allowedKeys: [...trustedKeys], allowAll: false })
     this._peerFirewall = remotePublicKey => !Buffer.isBuffer(remotePublicKey) || !trustedKeys.has(remotePublicKey.toString('hex'))
   }
 
-  // Supported MDK versions do not forward server options in start(). Keep the
-  // upstream transport startup here, adding the firewall BEFORE listen; retain
-  // the inherited device, identity, discovery, dispatch, and stop lifecycle.
-  // The CI runtime matrix exercises this adapter as MDK evolves.
+  // Newer MDK owns admission, envelope validation and public error handling.
+  // Older releases need the transport adapter to install a firewall before listen.
   async start () {
+    if (typeof super.allowKey === 'function') return super.start()
     await this._openContexts()
     const seedDht = await this._getOrCreateSeed('seedDht')
     const seedRpc = await this._getOrCreateSeed('seedRpc')
