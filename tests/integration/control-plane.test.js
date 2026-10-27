@@ -91,5 +91,8 @@ test('console transport failures expose stable outcome codes without replay or r
   t.is(commandResult(body, response.status).uncertain, true)
   t.is(writes, 1, 'an unknown command outcome is never replayed')
   t.alike(diagnostics, ['ERR_CONTROL_WORKER_UNAVAILABLE: ECONNRESET', 'ERR_CONTROL_COMMAND_OUTCOME_UNKNOWN: ECONNRESET'])
+  failure.code = 'CHANNEL_DESTROYED'
+  t.is((await fetch(`${base}/api/capabilities`, { headers })).status, 502)
+  t.is(diagnostics.at(-1), 'ERR_CONTROL_WORKER_UNAVAILABLE: CHANNEL_DESTROYED')
   t.is(JSON.stringify({ body, readBody, diagnostics }).includes('synthetic-log-secret'), false)
 })

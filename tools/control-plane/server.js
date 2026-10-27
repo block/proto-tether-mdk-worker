@@ -130,7 +130,7 @@ async function main () {
 function diagnosticCode (error) {
   const code = /^ERR_[A-Z0-9_]+(?=[:\s]|$)/.exec(error?.message || '')?.[0]
   if (code) return code
-  const systemCodes = new Set(['EADDRINUSE', 'EACCES', 'EPERM', 'ENOENT', 'ELOOP', 'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'MODULE_NOT_FOUND', 'CHANNEL_CLOSED', 'PEER_CONNECTION_FAILED', 'TIMEOUT_EXCEEDED'])
+  const systemCodes = new Set(['EADDRINUSE', 'EACCES', 'EPERM', 'ENOENT', 'ELOOP', 'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'MODULE_NOT_FOUND', 'CHANNEL_CLOSED', 'CHANNEL_DESTROYED', 'PEER_CONNECTION_FAILED', 'TIMEOUT_EXCEEDED'])
   return systemCodes.has(error?.code) ? error.code : 'ERR_CONTROL_UNEXPECTED'
 }
 

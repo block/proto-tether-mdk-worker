@@ -58,14 +58,19 @@ test('console CLI joins the configured private DHT and rotates its API token on 
   const second = await launchConsole(t, env)
   t.is(second.token === first.token, false, 'access tokens are per launch, not derived from the persistent client seed')
   t.is((await fetch(`${second.base}/api/capabilities`, { headers })).status, 401, 'a previous launch token grants no API access')
-  t.is((await fetch(`${second.base}/api/capabilities`, { headers: { 'x-control-token': second.token } })).status, 200)
+  t.is((await fetch(`${second.base}/api/config`, { headers: { 'x-control-token': second.token } })).status, 200, 'the replacement launch token authenticates without sharing a live DHT connection')
 
-  const mismatched = await launchConsole(t, { ...env, PROTO_WORKER_ID: 'wrong-worker-id' })
-  const response = await fetch(`${mismatched.base}/api/capabilities`, { headers: { 'x-control-token': mismatched.token } })
-  t.is(response.status, 502)
-  t.is((await response.json()).error, 'ERR_CONTROL_WORKER_UNAVAILABLE')
-  await mismatched.stop()
-  t.ok(mismatched.stderr().includes('ERR_CONTROL_WORKER_RESPONSE_INVALID'), 'request diagnostics identify a worker identity mismatch')
+  // Reuse the proven RPC connection so a holepunch failure cannot mask response validation.
+  worker.runtime.workerId = 'different-worker-id'
+  try {
+    const response = await fetch(`${first.base}/api/capabilities`, { headers })
+    t.is(response.status, 502)
+    t.is((await response.json()).error, 'ERR_CONTROL_WORKER_UNAVAILABLE')
+  } finally {
+    worker.runtime.workerId = 'proto-worker'
+  }
+  await first.stop()
+  t.is(first.stderr().trim(), 'ERR_CONTROL_WORKER_UNAVAILABLE: ERR_CONTROL_WORKER_RESPONSE_INVALID', 'request diagnostics identify a worker identity mismatch over the established connection')
 })
 
 test('console CLI reports a busy port without leaking its private seed or a launch token', { timeout: 10000 }, async t => {
