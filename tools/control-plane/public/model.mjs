@@ -24,10 +24,26 @@ export function parseParams (command, values) {
   return params
 }
 
+const ambiguousCommandErrors = new Set([
+  'ERR_DEVICE_CONNECTION', 'ERR_HTTP_RESPONSE', 'ERR_REQUEST_TIMEOUT', 'ERR_RESPONSE_INVALID_JSON',
+  'ERR_POWER_TARGET_WRITE_UNVERIFIED', 'ERR_FIRMWARE_RESPONSE_INVALID', 'ERR_CONTROL_COMMAND_OUTCOME_UNKNOWN'
+])
+
 export function commandResult (body, httpStatus) {
   const ok = httpStatus >= 200 && httpStatus < 300 && body?.status === 'SUCCESS' && body.result?.success !== false
   const error = body?.error || body?.message || `HTTP ${httpStatus}`
-  return { ok, message: ok ? 'Command succeeded' : String(error), uncertain: /UNVERIFIED|CONNECTION|TIMEOUT|HTTP_RESPONSE|FIRMWARE_RESPONSE_INVALID|INVALID_JSON|unknown/i.test(String(error)) }
+  const code = String(error).match(/\bERR_[A-Z0-9_]+\b/)?.[0]
+  return { ok, message: ok ? 'Command succeeded' : String(body?.message || error), uncertain: !ok && ambiguousCommandErrors.has(code) }
+}
+
+export function commandLifecycle (state, event) {
+  if (state.phase === 'idle' && event.type === 'review') return { phase: 'reviewing', pending: event.payload }
+  if (state.phase === 'reviewing') {
+    if (event.type === 'close' && event.confirmed) return { phase: 'sending', pending: state.pending }
+    if (event.type === 'close' || event.type === 'cancel') return { phase: 'idle', pending: null }
+  }
+  if (state.phase === 'sending' && event.type === 'complete') return { phase: 'idle', pending: null }
+  return state
 }
 
 export function preview (value) {

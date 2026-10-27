@@ -3,6 +3,8 @@
 const http = require('node:http')
 const fs = require('node:fs/promises')
 const path = require('node:path')
+const { randomBytes, timingSafeEqual } = require('node:crypto')
+const parseBootstrap = require('../../lib/dht-bootstrap')
 
 const ASSETS = {
   '/': ['index.html', 'text/html'],
@@ -11,9 +13,11 @@ const ASSETS = {
   '/styles.css': ['styles.css', 'text/css']
 }
 
-function createControlPlane ({ client, deviceId = 'proto-r2-1' } = {}) {
+function createControlPlane ({ client, deviceId = 'proto-r2-1', accessToken = randomBytes(32).toString('hex') } = {}) {
   if (!client) throw new Error('Worker client is required')
-  if (typeof deviceId !== 'string' || !deviceId.trim()) throw new Error('Device ID is required')
+  if (typeof deviceId !== 'string' || !deviceId.trim()) throw new Error('ERR_CONTROL_DEVICE_ID_INVALID: Device ID is required')
+  if (typeof accessToken !== 'string' || !/^[a-f0-9]{64}$/.test(accessToken)) throw new Error('ERR_CONTROL_ACCESS_TOKEN_INVALID')
+  const expectedToken = Buffer.from(accessToken)
   const server = http.createServer(async (req, res) => {
     const port = server.address().port
     const hosts = [`127.0.0.1:${port}`, `localhost:${port}`]
@@ -25,7 +29,14 @@ function createControlPlane ({ client, deviceId = 'proto-r2-1' } = {}) {
     res.setHeader('x-content-type-options', 'nosniff')
     res.setHeader('referrer-policy', 'no-referrer')
     res.setHeader('content-security-policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
-    const url = new URL(req.url, `http://${req.headers.host}`)
+    let url
+    try { url = new URL(req.url, `http://${req.headers.host}`) } catch { return json(400, { error: 'ERR_CONTROL_REQUEST_URL_INVALID', message: 'Invalid request URL' }) }
+    if (url.pathname.startsWith('/api/')) {
+      const suppliedToken = Buffer.from(req.headers['x-control-token'] || '')
+      if (suppliedToken.length !== expectedToken.length || !timingSafeEqual(suppliedToken, expectedToken)) {
+        return json(401, { error: 'ERR_CONTROL_UNAUTHORIZED', message: 'Open the tokenized URL printed when this console started' })
+      }
+    }
     try {
       if (req.method === 'GET' && ASSETS[url.pathname]) {
         const [file, type] = ASSETS[url.pathname]
@@ -57,8 +68,10 @@ function createControlPlane ({ client, deviceId = 'proto-r2-1' } = {}) {
         result = await client.command(deviceId, command.command, command.params)
       } else return json(404, { error: 'Route not found' })
       json(200, result)
-    } catch {
-      json(502, { error: bodyWasCommand(req) ? 'Worker request failed. Command outcome is unknown; read device state before another write. This request was not retried.' : 'Worker unavailable. Check the worker key and trusted client identity, then reconnect.' })
+    } catch (error) {
+      const code = bodyWasCommand(req) ? 'ERR_CONTROL_COMMAND_OUTCOME_UNKNOWN' : 'ERR_CONTROL_WORKER_UNAVAILABLE'
+      console.error(`${code}: ${diagnosticCode(error)}`)
+      json(502, { error: code, message: bodyWasCommand(req) ? 'Worker request failed. Command outcome is unknown; read device state before another write. This request was not retried.' : 'Worker unavailable. Check the bootstrap network, worker key, ID and trusted client identity, then reconnect.' })
     }
   })
   return server
@@ -69,7 +82,7 @@ function bodyWasCommand (req) {
 }
 
 if (require.main === module) {
-  main().catch(() => { console.error('ERR_CONTROL_STARTUP_FAILED: check MDK_REPO, MDK_CLIENT_SEED_FILE and MDK_WORKER_KEY'); process.exitCode = 1 })
+  main().catch(error => { console.error(`ERR_CONTROL_STARTUP_FAILED: ${diagnosticCode(error)}`); process.exitCode = 1 })
 }
 
 async function main () {
@@ -80,11 +93,13 @@ async function main () {
     return
   }
   const port = Number(process.env.CONTROL_PORT || 3041)
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid CONTROL_PORT')
-  const client = createWorkerClient({ publicKey: process.env.MDK_WORKER_KEY, workerId: process.env.PROTO_WORKER_ID, keyPair })
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('ERR_CONTROL_PORT_INVALID')
+  const bootstrap = parseBootstrap(process.env.PROTO_DHT_BOOTSTRAP)
+  const accessToken = randomBytes(32).toString('hex')
+  const client = createWorkerClient({ publicKey: process.env.MDK_WORKER_KEY, workerId: process.env.PROTO_WORKER_ID, keyPair, bootstrap })
   let server
   try {
-    server = createControlPlane({ client, deviceId: process.env.PROTO_DEVICE_ID })
+    server = createControlPlane({ client, deviceId: process.env.PROTO_DEVICE_ID, accessToken })
     await new Promise((resolve, reject) => {
       server.once('error', reject)
       server.listen(port, '127.0.0.1', () => {
@@ -109,7 +124,14 @@ async function main () {
   }
   process.once('SIGINT', stop)
   process.once('SIGTERM', stop)
-  console.log(`Proto development console: http://127.0.0.1:${server.address().port}`)
+  console.log(`Proto development console: http://127.0.0.1:${server.address().port}/#${accessToken}`)
+}
+
+function diagnosticCode (error) {
+  const code = /^ERR_[A-Z0-9_]+(?=[:\s]|$)/.exec(error?.message || '')?.[0]
+  if (code) return code
+  const systemCodes = new Set(['EADDRINUSE', 'EACCES', 'EPERM', 'ENOENT', 'ELOOP', 'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'MODULE_NOT_FOUND', 'CHANNEL_CLOSED', 'PEER_CONNECTION_FAILED', 'TIMEOUT_EXCEEDED'])
+  return systemCodes.has(error?.code) ? error.code : 'ERR_CONTROL_UNEXPECTED'
 }
 
 module.exports = { createControlPlane }

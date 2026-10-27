@@ -51,12 +51,34 @@ export MDK_WORKER_KEY='<worker publicKey>'
 npm run console
 ```
 
-Open <http://127.0.0.1:3041>. Defaults match the bundled host:
+Open the URL printed at startup, such as `http://127.0.0.1:3041/#<launch-token>`.
+Each launch generates a new token required by every `/api/*` request, including
+reads. Keep that URL private. The browser moves the token into per-tab session
+storage and removes the fragment from the address bar; refreshing that tab still
+works. After restarting the console, open its new startup URL. The static page can
+load without the token, but its API calls receive HTTP 401.
+
+Defaults match the bundled host:
 `PROTO_WORKER_ID=proto-worker` and `PROTO_DEVICE_ID=proto-r2-1`. Set the same IDs
 in both terminals when overriding them. `CONTROL_PORT` changes the console's HTTP
-port. The server binds to `127.0.0.1`; rig credentials stay in the worker host.
+port. Set `PROTO_DHT_BOOTSTRAP` to the same value as the worker host when using a
+private DHT or testnet, for example `127.0.0.1:12345,bootstrap.example:23456`
+(bracket IPv6 addresses as `[::1]:12345`). If unset, both use public HyperDHT.
+The server binds to `127.0.0.1`; rig credentials stay in the worker host.
 `npm run control` remains an alias for `npm run console`. Existing identity paths
 under `store/control-plane/` remain valid.
+
+The console client key has full worker access, including firmware updates, outside
+Kernel role checks and its command audit trail. Once development is done, stop
+the console, remove its public key from `PROTO_TRUSTED_KERNEL_KEYS`, and restart
+the worker host; preserve any Kernel keys that should remain trusted. The launch
+token limits access to the running HTTP console and does not revoke the persistent
+worker key. Processes running under your own OS account remain trusted.
+
+Startup and request failures print stable diagnostic codes, such as `EADDRINUSE`,
+`ERR_CONTROL_PORT_INVALID`, or `ERR_CONTROL_WORKER_RESPONSE_INVALID`. Raw error
+messages and device responses are not logged. A 502 command transport failure
+returns `ERR_CONTROL_COMMAND_OUTCOME_UNKNOWN`; inspect device state before another write.
 
 ## Use it
 

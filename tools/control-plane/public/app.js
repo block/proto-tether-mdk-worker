@@ -1,8 +1,22 @@
-/* global document, fetch, FormData, FileReader, crypto */
-import { parseParams, commandResult, preview } from './model.mjs'
+/* global document, fetch, FormData, FileReader, crypto, location, history, sessionStorage, addEventListener */
+import { parseParams, commandResult, commandLifecycle, preview } from './model.mjs'
 
 const $ = selector => document.querySelector(selector)
-const state = { contract: null, config: null, channel: null, command: null, readings: new Map(), reading: new Set(), activity: [], sending: false, pending: null }
+const state = { contract: null, config: null, channel: null, command: null, readings: new Map(), reading: new Set(), activity: [], commandFlow: { phase: 'idle', pending: null } }
+let controlToken = sessionStorage.getItem('control-token') || ''
+
+function consumeControlToken () {
+  const token = location.hash.slice(1)
+  if (!token) return false
+  controlToken = token
+  sessionStorage.setItem('control-token', controlToken)
+  history.replaceState(null, '', `${location.pathname}${location.search}`)
+  return true
+}
+consumeControlToken()
+addEventListener('hashchange', () => {
+  if (consumeControlToken()) connect()
+})
 
 function element (tag, text, className) {
   const node = document.createElement(tag)
@@ -12,7 +26,7 @@ function element (tag, text, className) {
 }
 
 async function request (url, options) {
-  const response = await fetch(url, options)
+  const response = await fetch(url, { ...options, headers: { ...options?.headers, 'x-control-token': controlToken } })
   const text = await response.text()
   let body
   try { body = JSON.parse(text) } catch { body = { error: text || `HTTP ${response.status}` } }
@@ -21,7 +35,7 @@ async function request (url, options) {
 }
 
 function requireSuccess (result) {
-  if (result.httpStatus < 200 || result.httpStatus >= 300 || result.body.error) throw new Error(result.body.error || result.body.message || `HTTP ${result.httpStatus}`)
+  if (result.httpStatus < 200 || result.httpStatus >= 300 || result.body.error) throw new Error(result.body.message || result.body.error || `HTTP ${result.httpStatus}`)
   return result.body
 }
 
@@ -152,25 +166,25 @@ function renderSummary (snap) {
 }
 
 function record (kind, name, requestBody, response, httpStatus) {
-  state.activity.unshift({ kind, name, at: Date.now(), request: requestBody ? preview(requestBody) : null, response: preview(response), httpStatus })
+  const entry = { kind, name, at: Date.now(), request: requestBody ? preview(requestBody) : null, response: preview(response), httpStatus }
+  state.activity.unshift(entry)
   state.activity.length = Math.min(state.activity.length, 30)
   $('#activity-count').textContent = state.activity.length
-  $('#activity-list').replaceChildren()
-  for (const entry of state.activity) {
-    const item = element('details', undefined, 'activity-item')
-    const heading = element('summary', undefined, 'activity-heading')
-    heading.append(element('span', `${entry.kind.toUpperCase()} / ${entry.name} · HTTP ${entry.httpStatus}`), element('time', new Date(entry.at).toLocaleTimeString()))
-    item.append(heading)
-    if (entry.request) item.append(element('h3', 'Request'), element('pre', entry.request))
-    item.append(element('h3', 'Response'), element('pre', entry.response))
-    $('#activity-list').append(item)
-  }
+  const item = element('details', undefined, 'activity-item')
+  const heading = element('summary', undefined, 'activity-heading')
+  heading.append(element('span', `${entry.kind.toUpperCase()} / ${entry.name} · HTTP ${entry.httpStatus}`), element('time', new Date(entry.at).toLocaleTimeString()))
+  item.append(heading)
+  if (entry.request) item.append(element('h3', 'Request'), element('pre', entry.request))
+  item.append(element('h3', 'Response'), element('pre', entry.response))
+  const list = $('#activity-list')
+  list.prepend(item)
+  while (list.children.length > 30) list.lastElementChild.remove()
 }
 
 async function readChannel (channel = state.channel) {
   if (!channel || state.reading.has(channel.name)) return
   state.reading.add(channel.name)
-  renderReading()
+  if (state.channel?.name === channel.name) renderReading()
   try {
     const result = await request(`/api/telemetry/${encodeURIComponent(channel.name)}`)
     state.readings.set(channel.name, { ...result, at: Date.now() })
@@ -181,7 +195,7 @@ async function readChannel (channel = state.channel) {
     record('read', channel.name, null, { error: error.message }, 0)
   } finally {
     state.reading.delete(channel.name)
-    renderReading()
+    if (state.channel?.name === channel.name) renderReading()
   }
 }
 
@@ -283,12 +297,11 @@ function selectCommand (command) {
   $('#command-constraints').textContent = command.constraints || 'No additional constraints declared.'
   $('#parameter-fields').replaceChildren(...(command.params || []).map(parameterInput))
   if (!command.params?.length) $('#parameter-fields').append(element('p', 'This command takes no parameters.', 'muted'))
-  $('#review-command').disabled = state.sending
+  $('#review-command').disabled = state.commandFlow.phase === 'sending'
   setError('#form-error', '')
 }
 
 async function sendCommand (payload) {
-  state.sending = true
   $('#review-command').disabled = true
   $('#command-status').className = 'muted'
   $('#command-status').textContent = `Sending ${payload.command} once…`
@@ -309,7 +322,7 @@ async function sendCommand (payload) {
     $('#command-status').textContent = message
     record('command', payload.command, payload, { error: message }, 0)
   } finally {
-    state.sending = false
+    state.commandFlow = commandLifecycle(state.commandFlow, { type: 'complete' })
     $('#review-command').disabled = !state.command
   }
 }
@@ -352,22 +365,26 @@ $('#reconnect').addEventListener('click', connect)
 $('#refresh-contract').addEventListener('click', connect)
 $('#command-form').addEventListener('submit', event => {
   event.preventDefault()
-  if (!state.command || state.sending) return
+  if (!state.command || state.commandFlow.phase !== 'idle') return
   setError('#form-error', '')
   try {
     const values = Object.fromEntries(new FormData(event.target))
-    state.pending = { command: state.command.name, params: parseParams(state.command, values) }
+    const payload = { command: state.command.name, params: parseParams(state.command, values) }
     $('#confirm-title').textContent = `Send ${state.command.name}?`
     $('#confirm-target').textContent = `Device: ${state.config.deviceId} · ${state.config.endpoint}`
-    $('#confirm-payload').textContent = preview(state.pending)
+    $('#confirm-payload').textContent = preview(payload)
     $('#confirm-dialog').returnValue = ''
     $('#confirm-dialog').showModal()
+    state.commandFlow = commandLifecycle(state.commandFlow, { type: 'review', payload })
   } catch (error) { setError('#form-error', error.message) }
 })
 $('#confirm-dialog').addEventListener('close', () => {
-  const payload = state.pending
-  state.pending = null
-  if ($('#confirm-dialog').returnValue === 'send' && payload && !state.sending) sendCommand(payload)
+  const previous = state.commandFlow
+  state.commandFlow = commandLifecycle(previous, { type: 'close', confirmed: $('#confirm-dialog').returnValue === 'send' })
+  if (previous.phase === 'reviewing' && state.commandFlow.phase === 'sending') sendCommand(state.commandFlow.pending)
+})
+$('#confirm-dialog').addEventListener('cancel', () => {
+  state.commandFlow = commandLifecycle(state.commandFlow, { type: 'cancel' })
 })
 $('#read-identity').addEventListener('click', async () => {
   try {

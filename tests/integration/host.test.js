@@ -26,7 +26,10 @@ const RPC_TIMEOUT = 10000
 test('console runner exits and closes RPC resources after invalid startup configuration', { timeout: 10000 }, async t => {
   const seedFile = path.join(temporaryStore(t), 'console.seed')
   fs.writeFileSync(seedFile, randomBytes(32), { mode: 0o600 })
-  for (const invalid of [{ PROTO_DEVICE_ID: ' ', CONTROL_PORT: '3041' }, { PROTO_DEVICE_ID: 'proto-r2-1', CONTROL_PORT: 'invalid' }]) {
+  for (const [invalid, code] of [
+    [{ PROTO_DEVICE_ID: ' ', CONTROL_PORT: '3041' }, 'ERR_CONTROL_DEVICE_ID_INVALID'],
+    [{ PROTO_DEVICE_ID: 'proto-r2-1', CONTROL_PORT: 'invalid' }, 'ERR_CONTROL_PORT_INVALID']
+  ]) {
     const child = spawn(process.execPath, [path.join(WORKER_DIR, 'tools/control-plane/server.js')], {
       env: { ...process.env, MDK_CLIENT_SEED_FILE: seedFile, MDK_WORKER_KEY: 'ab'.repeat(32), ...invalid },
       timeout: 3000
@@ -38,7 +41,7 @@ test('console runner exits and closes RPC resources after invalid startup config
       child.once('close', (code, signal) => resolve({ code, signal }))
     })
     t.alike(exited, { code: 1, signal: null }, 'startup error exits without waiting for the subprocess timeout')
-    t.ok(stderr.startsWith('ERR_CONTROL_STARTUP_FAILED:'))
+    t.is(stderr, `ERR_CONTROL_STARTUP_FAILED: ${code}\n`)
   }
 })
 
@@ -64,17 +67,18 @@ test('standalone console exercises the real authorized worker without a site gat
   t.teardown(() => worker.stop())
   const client = createWorkerClient({ publicKey: worker.runtime.getPublicKey().toString('hex'), keyPair, bootstrap: testnet.bootstrap })
   t.teardown(() => client.close())
-  const server = createControlPlane({ client })
+  const accessToken = randomBytes(32).toString('hex')
+  const server = createControlPlane({ client, accessToken })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   t.teardown(() => new Promise(resolve => server.close(resolve)))
   const base = `http://127.0.0.1:${server.address().port}`
-  const read = async route => (await fetch(`${base}/api/${route}`)).json()
+  const read = async route => (await fetch(`${base}/api/${route}`, { headers: { 'x-control-token': accessToken } })).json()
   t.is((await read('capabilities')).capabilities.telemetry.length, 22)
   t.alike((await read('identity')).devices, [{ deviceId: 'proto-r2-1' }])
   t.is((await read('telemetry/hashrate_avg')).value, 95.5)
   const command = async (name, params) => fetch(`${base}/api/command`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', origin: base },
+    headers: { 'content-type': 'application/json', origin: base, 'x-control-token': accessToken },
     body: JSON.stringify({ command: name, params })
   })
   t.is((await (await command('setLED', { enabled: true })).json()).status, 'SUCCESS')
