@@ -15,6 +15,8 @@ The worker authenticates with JWT bearer tokens. It reads telemetry, reports nor
 - A device password or token from secret management.
 - A host-supplied MDK checkout or installed `@tetherto/mdk` monorepo. The standalone `@tetherto/mdk-worker` package is not yet published; this worker does not bundle the runtime.
 
+To match CI locally, install the Node.js version listed in `.nvmrc` using your preferred tool. If you use nvm, run `nvm install && nvm use` from the repository directory.
+
 Do not commit credentials, access tokens, refresh tokens, or pool passwords. Device addresses are host-only values, not URLs, and cannot contain userinfo, a port, path, query, or fragment.
 
 ## Host the worker
