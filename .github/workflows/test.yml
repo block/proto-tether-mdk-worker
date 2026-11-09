@@ -17,13 +17,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - mdk-ref: 633ee07905a6af1d9e0c44b770df09eb0ac432b4
+          - mdk-revision: 633ee07905a6af1d9e0c44b770df09eb0ac432b4
             compatibility: minimum
-          - mdk-ref: 7f5cae88f67cd0ebedaa325778f9209135de1b8f
+          - mdk-revision: 7f5cae88f67cd0ebedaa325778f9209135de1b8f
             compatibility: v0.10.0
-          - mdk-ref: 2a1cd186366fe84150aed450a7a251849eaefb12
+          - mdk-revision: 2a1cd186366fe84150aed450a7a251849eaefb12
             compatibility: v0.12.2
-          - mdk-ref: main
+          - mdk-revision: main
             compatibility: upstream
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -39,17 +39,18 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: tetherto/mdk
-          ref: ${{ matrix.mdk-ref }}
+          ref: ${{ matrix.mdk-revision }}
           path: mdk
           persist-credentials: false
 
+      # Scheduled and manual runs execute MDK main with write access to the
+      # default-branch cache, so no job may restore a cache it could poison.
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: proto-tether-mdk-worker/.nvmrc
           registry-url: https://registry.npmjs.org
-          cache: npm
-          cache-dependency-path: proto-tether-mdk-worker/package-lock.json
+          package-manager-cache: false
 
       - name: Reject non-public package registries
         working-directory: proto-tether-mdk-worker
