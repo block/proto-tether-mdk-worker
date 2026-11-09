@@ -159,7 +159,7 @@ through the in-process Kernel `command:done` event; modern revisions query the
 SDK's `getCommandStatus`. This check uses a mock rig and does not exercise the
 browser site UI or hardware.
 
-CI tests the minimum supported MDK commit `633ee07905a6af1d9e0c44b770df09eb0ac432b4`, pinned v0.10.0 (`7f5cae88f67cd0ebedaa325778f9209135de1b8f`), and upstream `main`. It runs on pull requests, pushes to `main`, manual dispatch, and weekly on Mondays at 06:00 UTC. The integration suite exercises real HRPC over a local DHT test network, persistent identity across restart, and host shutdown, in addition to in-process dispatch and mock HTTP behavior.
+CI tests the minimum supported MDK commit `633ee07905a6af1d9e0c44b770df09eb0ac432b4`, pinned v0.10.0 (`7f5cae88f67cd0ebedaa325778f9209135de1b8f`), pinned v0.12.2 (`2a1cd186366fe84150aed450a7a251849eaefb12`), and upstream `main`. The v0.12.2 job covers transport-role authorization before MDK 0.13 introduced token and RBAC authorization. CI runs on pull requests, pushes to `main`, manual dispatch, and weekly on Mondays at 06:00 UTC. The integration suite exercises real HRPC over a local DHT test network, persistent identity across restart, and host shutdown, in addition to in-process dispatch and mock HTTP behavior.
 
 Run the local mock for development:
 

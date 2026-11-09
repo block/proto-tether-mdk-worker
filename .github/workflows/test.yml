@@ -21,6 +21,8 @@ jobs:
             compatibility: minimum
           - mdk-ref: 7f5cae88f67cd0ebedaa325778f9209135de1b8f
             compatibility: v0.10.0
+          - mdk-ref: 2a1cd186366fe84150aed450a7a251849eaefb12
+            compatibility: v0.12.2
           - mdk-ref: main
             compatibility: upstream
     runs-on: ubuntu-latest

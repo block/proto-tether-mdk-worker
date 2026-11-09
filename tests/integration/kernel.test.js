@@ -109,6 +109,7 @@ test('Kernel registers Proto and routes SDK telemetry and command results over a
 
   if (typeof kernel.allowKey === 'function') {
     const readerSeed = randomBytes(32)
+    // MDK 0.12 enforces these transport roles; 0.13+ uses the reader's RBAC grant.
     kernel.allowKey(DHT.keyPair(readerSeed).publicKey, ['read'])
     const reader = createRawMdkClient({ credential: auth.reader, hrpc: { key: kernel.getPublicKey(), seed: readerSeed, bootstrap: testnet.bootstrap } })
     t.teardown(() => reader.close(), { order: -20 })
