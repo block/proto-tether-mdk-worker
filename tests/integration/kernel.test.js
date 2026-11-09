@@ -36,6 +36,7 @@ test('Kernel registers Proto and routes SDK telemetry and command results over a
   t.teardown(() => kernel.stop(), { order: -10 })
   await kernel.init()
   await kernel.start()
+  const auth = await configureKernelAuth(kernel)
   const worker = await startProtoWorker({
     workerId: 'proto-kernel-worker',
     storeDir: path.join(root, 'worker'),
@@ -50,10 +51,12 @@ test('Kernel registers Proto and routes SDK telemetry and command results over a
     if (envelope.action === 'command.request') dispatched.push(envelope.payload.command)
     return handleRequest(envelope)
   }
-  const client = createRawMdkClient({ hrpc: { key: kernel.getPublicKey(), seed, bootstrap: testnet.bootstrap } })
+  const client = createRawMdkClient({ credential: auth.operator, hrpc: { key: kernel.getPublicKey(), seed, bootstrap: testnet.bootstrap } })
   t.teardown(() => client.close(), { order: -20 })
   await client.connect()
   await kernel.registerWorker(worker.runtime.getPublicKey())
+  // Read directly first: waitForWorkers hides authorization errors as timeouts.
+  await client.listWorkers()
   const ready = await client.waitForWorkers({ count: 1, timeoutMs: 10000, intervalMs: 50 })
   t.is(ready[0].workerId, 'proto-kernel-worker')
   t.is(ready[0].state, 'READY')
@@ -106,17 +109,45 @@ test('Kernel registers Proto and routes SDK telemetry and command results over a
 
   if (typeof kernel.allowKey === 'function') {
     const readerSeed = randomBytes(32)
+    // MDK 0.12 enforces these transport roles; 0.13+ uses the reader's RBAC grant.
     kernel.allowKey(DHT.keyPair(readerSeed).publicKey, ['read'])
-    const reader = createRawMdkClient({ hrpc: { key: kernel.getPublicKey(), seed: readerSeed, bootstrap: testnet.bootstrap } })
+    const reader = createRawMdkClient({ credential: auth.reader, hrpc: { key: kernel.getPublicKey(), seed: readerSeed, bootstrap: testnet.bootstrap } })
     t.teardown(() => reader.close(), { order: -20 })
     await reader.connect()
     t.is((await reader.pullTelemetry('proto-kernel-1', 'hashrate_avg')).value, 95.5)
-    const refused = await reader.sendCommand('proto-kernel-1', 'setLED', { enabled: false })
-    t.ok(refused.error.startsWith('ERR_KERNEL_ACTION_FORBIDDEN'))
+    if (auth.reader) {
+      await t.exception(reader.sendCommand('proto-kernel-1', 'setLED', { enabled: false }), /ERR_KERNEL_ACTION_FORBIDDEN/)
+    } else {
+      const refused = await reader.sendCommand('proto-kernel-1', 'setLED', { enabled: false })
+      t.ok(refused.error.startsWith('ERR_KERNEL_ACTION_FORBIDDEN'))
+    }
     t.alike(dispatched, ['setLED', 'setNetwork'], 'read-only callers cannot dispatch commands')
     t.is(mock.state.led, true)
   }
 })
+
+async function configureKernelAuth (kernel) {
+  // MDK 0.13+ separates transport admission from token and RBAC authorization.
+  if (!kernel.identity) return {}
+  const { generateCredential } = require(path.join(MDK_REPO, 'backend/core/identity'))
+  const credentials = {}
+  for (const name of ['operator', 'reader']) {
+    const key = generateCredential()
+    await kernel.identity.upsertServiceAccount({ name, publicKey: key.publicKey })
+    credentials[name] = { name, privateKey: key.privateKeyPem }
+  }
+  await kernel.applyRbac({
+    roles: [
+      { name: 'operator', rules: [{ resources: ['workers'], verbs: ['list'] }, { resources: ['devices'], verbs: ['read', 'write'] }] },
+      { name: 'reader', rules: [{ resources: ['devices'], verbs: ['read'] }] }
+    ],
+    bindings: [
+      { role: 'operator', subjects: [{ kind: 'ServiceAccount', name: 'operator' }] },
+      { role: 'reader', subjects: [{ kind: 'ServiceAccount', name: 'reader' }] }
+    ]
+  })
+  return credentials
+}
 
 async function commandResult (client, completed, commandId) {
   // Older MDK deletes settled commands; its in-process event is the result API.
